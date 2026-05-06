@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { cn } from "../lib/format";
 
 export type SiteCardSite = {
@@ -78,19 +79,37 @@ export function SiteCard({ site, extractor, isRunning, onExtract }: SiteCardProp
         </p>
       ) : null}
 
-      <button
-        type="button"
-        disabled={!canRun}
-        onClick={() => onExtract(site.id)}
-        className={cn(
-          "mt-5 w-full rounded-xl px-4 py-3 text-sm font-bold transition",
-          canRun
-            ? "bg-slate-900 text-white hover:bg-slate-700"
-            : "cursor-not-allowed bg-slate-100 text-slate-400"
-        )}
-      >
-        {isRunning ? "Extracting..." : "Extract Orders"}
-      </button>
+      <div className="mt-5 grid gap-2">
+        <button
+          type="button"
+          disabled={!canRun}
+          onClick={() => onExtract(site.id)}
+          className={cn(
+            "w-full rounded-xl px-4 py-3 text-sm font-bold transition",
+            canRun
+              ? "bg-slate-900 text-white hover:bg-slate-700"
+              : "cursor-not-allowed bg-slate-100 text-slate-400"
+          )}
+        >
+          {isRunning ? "Extracting..." : "Extract Orders"}
+        </button>
+
+        <div className="grid grid-cols-2 gap-2">
+          <Link
+            href={`/sites/${site.id}`}
+            className="rounded-xl border border-slate-200 px-4 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Detail
+          </Link>
+
+          <Link
+            href={`/sites/${site.id}/settings`}
+            className="rounded-xl border border-slate-200 px-4 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Settings
+          </Link>
+        </div>
+      </div>
     </div>
   );
 }
