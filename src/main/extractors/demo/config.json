@@ -1,0 +1,9 @@
+{
+  "code": "demo",
+  "name": "Demo Extractor",
+  "description": "Local demo extractor for testing registry, progress, upsert and logs.",
+  "loginUrl": "about:blank",
+  "ordersUrl": "about:blank",
+  "version": "0.1.0",
+  "enabled": true
+}
