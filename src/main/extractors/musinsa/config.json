@@ -1,0 +1,9 @@
+{
+  "code": "musinsa",
+  "name": "Musinsa Buyer Orders",
+  "description": "Extract Musinsa buyer order items and product-level tracking numbers",
+  "loginUrl": "https://www.musinsa.com/order/order-list",
+  "ordersUrl": "https://www.musinsa.com/order/order-list",
+  "version": "0.1.0",
+  "enabled": true
+}
