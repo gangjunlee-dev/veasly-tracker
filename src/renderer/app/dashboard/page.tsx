@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import {
+  defaultOrderFilters,
+  OrderFilters,
+  type OrderFilterState
+} from "../../components/OrderFilters";
 import { OrderTable, type OrderRow } from "../../components/OrderTable";
 import { StatsCard } from "../../components/StatsCard";
 import { formatCurrency } from "../../lib/format";
@@ -33,21 +38,96 @@ function downloadTextFile(filename: string, content: string) {
   URL.revokeObjectURL(url);
 }
 
+function toCsvValue(value: unknown) {
+  const text = String(value ?? "");
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function buildOrdersCsv(orders: OrderRow[]) {
+  const header = [
+    "siteId",
+    "orderNumber",
+    "orderDate",
+    "productName",
+    "quantity",
+    "amount",
+    "shippingStatus",
+    "invoiceNumber"
+  ];
+
+  const rows = orders.map((order) => [
+    order.siteId,
+    order.orderNumber,
+    order.orderDate ?? "",
+    order.productName,
+    order.quantity ?? "",
+    order.amount ?? "",
+    order.shippingStatus ?? "",
+    order.invoiceNumber ?? ""
+  ]);
+
+  return [header, ...rows]
+    .map((row) => row.map(toCsvValue).join(","))
+    .join("\n");
+}
+
+function isDateInRange(orderDate: string | null | undefined, fromDate: string, toDate: string) {
+  if (!fromDate && !toDate) return true;
+  if (!orderDate) return false;
+
+  const value = orderDate.slice(0, 10);
+
+  if (fromDate && value < fromDate) return false;
+  if (toDate && value > toDate) return false;
+
+  return true;
+}
+
+function filterOrders(orders: OrderRow[], filters: OrderFilterState) {
+  const search = filters.search.trim().toLowerCase();
+
+  return orders.filter((order) => {
+    if (search) {
+      const haystack = `${order.orderNumber} ${order.productName}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+
+    if (filters.status !== "ALL" && order.shippingStatus !== filters.status) {
+      return false;
+    }
+
+    if (filters.siteId !== "ALL" && String(order.siteId) !== filters.siteId) {
+      return false;
+    }
+
+    if (!isDateInRange(order.orderDate, filters.fromDate, filters.toDate)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
 export default function DashboardPage() {
   const [ping, setPing] = useState("checking...");
   const [sites, setSites] = useState<Site[]>([]);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [orderTotal, setOrderTotal] = useState(0);
+  const [filters, setFilters] = useState<OrderFilterState>(defaultOrderFilters);
   const [statusMessage, setStatusMessage] = useState("");
 
+  const filteredOrders = useMemo(() => {
+    return filterOrders(orders, filters);
+  }, [orders, filters]);
+
   const dashboard = useMemo(() => {
-    const totalAmount = orders.reduce(
+    const totalAmount = filteredOrders.reduce(
       (sum, order) => sum + Number(order.amount ?? 0),
       0
     );
-    const ready = orders.filter((order) => order.shippingStatus === "READY").length;
-    const shipped = orders.filter((order) => order.shippingStatus === "SHIPPED").length;
-    const pending = orders.filter((order) => order.shippingStatus === "PENDING").length;
+    const ready = filteredOrders.filter((order) => order.shippingStatus === "READY").length;
+    const shipped = filteredOrders.filter((order) => order.shippingStatus === "SHIPPED").length;
+    const pending = filteredOrders.filter((order) => order.shippingStatus === "PENDING").length;
 
     return {
       totalAmount,
@@ -55,12 +135,12 @@ export default function DashboardPage() {
       shipped,
       pending
     };
-  }, [orders]);
+  }, [filteredOrders]);
 
   const loadOrders = useCallback(async () => {
     const result = (await window.api.orders.listAll({
       page: 1,
-      pageSize: 50
+      pageSize: 500
     })) as OrdersResult;
 
     setOrders(result.items ?? []);
@@ -91,13 +171,15 @@ export default function DashboardPage() {
   }, [loadData]);
 
   const handleExportCsv = async () => {
-    setStatusMessage("Exporting CSV...");
+    setStatusMessage("Exporting filtered CSV...");
 
     try {
-      const csv = await window.api.orders.export({});
-      const filename = `veasly-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+      const csv = buildOrdersCsv(filteredOrders);
+      const filename = `veasly-filtered-orders-${new Date()
+        .toISOString()
+        .slice(0, 10)}.csv`;
 
-      downloadTextFile(filename, String(csv));
+      downloadTextFile(filename, csv);
       setStatusMessage(`CSV exported: ${filename}`);
     } catch (error) {
       console.error(error);
@@ -128,7 +210,7 @@ export default function DashboardPage() {
 
       <section className="grid gap-4 md:grid-cols-4">
         <StatsCard label="Sites" value={sites.length} />
-        <StatsCard label="Orders" value={orderTotal} />
+        <StatsCard label="Filtered Orders" value={filteredOrders.length} />
         <StatsCard label="Total Amount" value={formatCurrency(dashboard.totalAmount)} />
         <StatsCard
           label="Status"
@@ -150,9 +232,20 @@ export default function DashboardPage() {
       </section>
 
       <section className="mt-6">
+        <OrderFilters
+          value={filters}
+          onChange={setFilters}
+          sites={sites}
+          showSiteFilter
+          resultCount={filteredOrders.length}
+          totalCount={orderTotal}
+        />
+      </section>
+
+      <section className="mt-6">
         <OrderTable
-          orders={orders}
-          total={orderTotal}
+          orders={filteredOrders}
+          total={filteredOrders.length}
           onRefresh={loadOrders}
           onExportCsv={handleExportCsv}
         />
