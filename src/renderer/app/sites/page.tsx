@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AddSiteForm } from "../../components/AddSiteForm";
 import { AppShell } from "../../components/AppShell";
 import {
   ExtractionProgressPanel,
@@ -141,7 +142,7 @@ export default function SitesPage() {
         </div>
       ) : null}
 
-      <section className="grid gap-6 lg:grid-cols-[1fr_420px]">
+      <section className="grid gap-6 xl:grid-cols-[1fr_420px]">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -154,15 +155,15 @@ export default function SitesPage() {
             <button
               type="button"
               onClick={handleCreateDemoSite}
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-700"
+              className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
             >
-              Create Demo Site
+              Quick Demo Site
             </button>
           </div>
 
           {sites.length === 0 ? (
             <div className="mt-5 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">
-              사이트가 없습니다. Create Demo Site를 눌러 테스트 계정을 만드세요.
+              사이트가 없습니다. 오른쪽 Add Site 폼으로 계정을 등록하세요.
             </div>
           ) : (
             <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -179,11 +180,15 @@ export default function SitesPage() {
           )}
         </div>
 
-        <ExtractionProgressPanel
-          items={progressItems}
-          runningRunId={runningRunId}
-          onClear={() => setProgressItems([])}
-        />
+        <div className="space-y-6">
+          <AddSiteForm onCreated={loadData} />
+
+          <ExtractionProgressPanel
+            items={progressItems}
+            runningRunId={runningRunId}
+            onClear={() => setProgressItems([])}
+          />
+        </div>
       </section>
     </AppShell>
   );
