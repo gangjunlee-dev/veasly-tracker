@@ -90,3 +90,9 @@ typings/
 
 # Electron-Forge
 out/
+
+tmp/
+
+tmp/
+
+tmp/
