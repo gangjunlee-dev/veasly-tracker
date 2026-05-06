@@ -1,5 +1,8 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import path from "node:path";
+import { closeDb } from "./db/client";
+import { registerSitesIpc } from "./ipc/sites";
+import { registerOrdersIpc } from "./ipc/orders";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -11,6 +14,12 @@ function registerAppIpc() {
   ipcMain.handle("app:getVersion", async () => {
     return app.getVersion();
   });
+}
+
+function registerIpc() {
+  registerAppIpc();
+  registerSitesIpc();
+  registerOrdersIpc();
 }
 
 function createMainWindow() {
@@ -84,7 +93,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 app.whenReady().then(() => {
-  registerAppIpc();
+  registerIpc();
   createMainWindow();
 
   app.on("activate", () => {
@@ -92,6 +101,10 @@ app.whenReady().then(() => {
       createMainWindow();
     }
   });
+});
+
+app.on("before-quit", () => {
+  closeDb();
 });
 
 app.on("window-all-closed", () => {
