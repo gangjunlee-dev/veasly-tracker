@@ -3,6 +3,7 @@ import path from "node:path";
 import { closeDb } from "./db/client";
 import { registerSitesIpc } from "./ipc/sites";
 import { registerOrdersIpc } from "./ipc/orders";
+import { registerExtractorIpc } from "./ipc/extractor";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -20,6 +21,7 @@ function registerIpc() {
   registerAppIpc();
   registerSitesIpc();
   registerOrdersIpc();
+  registerExtractorIpc();
 }
 
 function createMainWindow() {

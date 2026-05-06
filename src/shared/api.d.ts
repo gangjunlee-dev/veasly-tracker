@@ -78,6 +78,46 @@ export type ExportOrdersInput = {
   search?: string;
 };
 
+export type ExtractorConfig = {
+  code: string;
+  name: string;
+  description?: string;
+  loginUrl?: string;
+  ordersUrl?: string;
+  version?: string;
+  enabled?: boolean;
+};
+
+export type ExtractionOptions = {
+  since?: string;
+  until?: string;
+  maxPages?: number;
+  lastOrderDate?: string;
+};
+
+export type ExtractionProgressPhase =
+  | "starting"
+  | "browser"
+  | "login"
+  | "session"
+  | "extracting"
+  | "saving"
+  | "success"
+  | "failed"
+  | "cancelled";
+
+export type ExtractionProgress = {
+  runId: string;
+  siteId: number;
+  siteCode: string;
+  phase: ExtractionProgressPhase;
+  message: string;
+  current?: number;
+  total?: number;
+  ordersFound?: number;
+  createdAt: string;
+};
+
 declare global {
   interface Window {
     api: {
@@ -102,6 +142,22 @@ declare global {
           input: ListAllOrdersInput
         ) => Promise<PaginatedResult<Order>>;
         export: (input: ExportOrdersInput) => Promise<string>;
+      };
+      extractor: {
+        available: () => Promise<ExtractorConfig[]>;
+        run: (input: {
+          siteId: number;
+          options?: ExtractionOptions;
+        }) => Promise<{ runId: string }>;
+        cancel: (input: {
+          runId: string;
+        }) => Promise<{
+          success: boolean;
+          message?: string;
+        }>;
+        onProgress: (
+          callback: (progress: ExtractionProgress) => void
+        ) => () => void;
       };
     };
   }

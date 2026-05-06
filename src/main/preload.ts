@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { IpcRendererEvent } from "electron";
 import type {
   CreateSiteInput,
   ExportOrdersInput,
+  ExtractionOptions,
+  ExtractionProgress,
   ListAllOrdersInput,
   ListOrdersBySiteInput,
   UpdateSiteInput
@@ -25,6 +28,27 @@ const api = {
       ipcRenderer.invoke("orders:listAll", input),
     export: (input: ExportOrdersInput) =>
       ipcRenderer.invoke("orders:export", input)
+  },
+  extractor: {
+    available: () => ipcRenderer.invoke("extractor:available"),
+    run: (input: { siteId: number; options?: ExtractionOptions }) =>
+      ipcRenderer.invoke("extractor:run", input),
+    cancel: (input: { runId: string }) =>
+      ipcRenderer.invoke("extractor:cancel", input),
+    onProgress: (callback: (progress: ExtractionProgress) => void) => {
+      const listener = (
+        _event: IpcRendererEvent,
+        progress: ExtractionProgress
+      ) => {
+        callback(progress);
+      };
+
+      ipcRenderer.on("extractor:progress", listener);
+
+      return () => {
+        ipcRenderer.removeListener("extractor:progress", listener);
+      };
+    }
   }
 };
 

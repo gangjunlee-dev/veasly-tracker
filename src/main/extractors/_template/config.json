@@ -1,0 +1,9 @@
+{
+  "code": "template",
+  "name": "Template Mall",
+  "description": "Template extractor. Copy this folder and rename it for a real mall.",
+  "loginUrl": "https://example.com/login",
+  "ordersUrl": "https://example.com/orders",
+  "version": "0.1.0",
+  "enabled": false
+}
