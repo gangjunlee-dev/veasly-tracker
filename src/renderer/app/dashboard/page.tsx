@@ -31,7 +31,7 @@ type LogsResult = {
 };
 
 function downloadTextFile(filename: string, content: string) {
-  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob([`\uFEFF${content}`], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
 
@@ -60,40 +60,65 @@ function safeParseRawData(rawData?: string | null): Record<string, unknown> {
   }
 }
 
-function buildOrdersCsv(orders: OrderRow[]) {
+function buildOrdersCsv(
+  orders: OrderRow[],
+  siteLookup: Map<number, { name: string; code: string }> = new Map()
+) {
   const header = [
+    "siteName",
+    "siteCode",
     "siteId",
     "orderNumber",
-    "orderDate",
-    "productName",
-    "quantity",
-    "amount",
-    "shippingStatus",
-    "carrier",
-    "invoiceNumber",
     "sourceOrderNumber",
     "ordOptNo",
+    "brandName",
+    "productName",
     "optionName",
-    "brandName"
+    "quantity",
+    "amount",
+    "currency",
+    "shippingStatus",
+    "carrier",
+    "trackingNumber",
+    "invoiceNumber",
+    "invoiceUrl",
+    "orderDate",
+    "noTracking",
+    "createdAt",
+    "updatedAt"
   ];
 
   const rows = orders.map((order) => {
     const raw = safeParseRawData(order.rawData);
+    const site = siteLookup.get(order.siteId);
+
+    const rawString = (key: string) => {
+      const value = raw[key];
+      return typeof value === "string" ? value : "";
+    };
 
     return [
+      site?.name ?? rawString("siteName"),
+      site?.code ?? rawString("siteCode"),
       order.siteId,
       order.orderNumber,
-      order.orderDate ?? "",
+      rawString("sourceOrderNumber"),
+      rawString("ordOptNo"),
+      rawString("brandName"),
       order.productName,
+      rawString("optionName"),
       order.quantity ?? "",
       order.amount ?? "",
+      order.currency ?? "KRW",
       order.shippingStatus ?? "",
-      typeof raw.carrier === "string" ? raw.carrier : "",
+      rawString("carrier"),
+      rawString("trackingNumber") || order.invoiceNumber || "",
       order.invoiceNumber ?? "",
-      typeof raw.sourceOrderNumber === "string" ? raw.sourceOrderNumber : "",
-      typeof raw.ordOptNo === "string" ? raw.ordOptNo : "",
-      typeof raw.optionName === "string" ? raw.optionName : "",
-      typeof raw.brandName === "string" ? raw.brandName : ""
+      order.invoiceUrl ?? "",
+      order.orderDate ?? "",
+      raw.noTracking === true ? "true" : "false",
+      order.createdAt ?? "",
+      order.updatedAt ?? ""
     ];
   });
 
@@ -101,7 +126,6 @@ function buildOrdersCsv(orders: OrderRow[]) {
     .map((row) => row.map(toCsvValue).join(","))
     .join("\n");
 }
-
 function isDateInRange(orderDate: string | null | undefined, fromDate: string, toDate: string) {
   if (!fromDate && !toDate) return true;
   if (!orderDate) return false;
@@ -247,7 +271,13 @@ export default function DashboardPage() {
     setStatusMessage("Exporting filtered CSV...");
 
     try {
-      const csv = buildOrdersCsv(filteredOrders);
+            const siteLookup = new Map<number, { name: string; code: string }>(
+        sites.map((site): [number, { name: string; code: string }] => [
+          site.id,
+          { name: site.name, code: site.code }
+        ])
+      );
+      const csv = buildOrdersCsv(filteredOrders, siteLookup);
       const filename = `veasly-filtered-orders-${new Date()
         .toISOString()
         .slice(0, 10)}.csv`;
