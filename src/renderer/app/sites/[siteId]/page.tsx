@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { AppShell } from "../../../components/AppShell";
+import { ExtractionLogTable, type ExtractionLogRow } from "../../../components/ExtractionLogTable";
 import {
   defaultOrderFilters,
   OrderFilters,
@@ -28,6 +29,11 @@ type OrdersResult = {
   items: OrderRow[];
 };
 
+type LogsResult = {
+  total: number;
+  items: ExtractionLogRow[];
+};
+
 function downloadTextFile(filename: string, content: string) {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -47,6 +53,17 @@ function toCsvValue(value: unknown) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
+function safeParseRawData(rawData?: string | null): Record<string, unknown> {
+  if (!rawData) return {};
+
+  try {
+    const parsed = JSON.parse(rawData);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function buildOrdersCsv(orders: OrderRow[]) {
   const header = [
     "siteId",
@@ -56,19 +73,33 @@ function buildOrdersCsv(orders: OrderRow[]) {
     "quantity",
     "amount",
     "shippingStatus",
-    "invoiceNumber"
+    "carrier",
+    "invoiceNumber",
+    "sourceOrderNumber",
+    "ordOptNo",
+    "optionName",
+    "brandName"
   ];
 
-  const rows = orders.map((order) => [
-    order.siteId,
-    order.orderNumber,
-    order.orderDate ?? "",
-    order.productName,
-    order.quantity ?? "",
-    order.amount ?? "",
-    order.shippingStatus ?? "",
-    order.invoiceNumber ?? ""
-  ]);
+  const rows = orders.map((order) => {
+    const raw = safeParseRawData(order.rawData);
+
+    return [
+      order.siteId,
+      order.orderNumber,
+      order.orderDate ?? "",
+      order.productName,
+      order.quantity ?? "",
+      order.amount ?? "",
+      order.shippingStatus ?? "",
+      typeof raw.carrier === "string" ? raw.carrier : "",
+      order.invoiceNumber ?? "",
+      typeof raw.sourceOrderNumber === "string" ? raw.sourceOrderNumber : "",
+      typeof raw.ordOptNo === "string" ? raw.ordOptNo : "",
+      typeof raw.optionName === "string" ? raw.optionName : "",
+      typeof raw.brandName === "string" ? raw.brandName : ""
+    ];
+  });
 
   return [header, ...rows]
     .map((row) => row.map(toCsvValue).join(","))
@@ -92,7 +123,21 @@ function filterOrders(orders: OrderRow[], filters: OrderFilterState) {
 
   return orders.filter((order) => {
     if (search) {
-      const haystack = `${order.orderNumber} ${order.productName}`.toLowerCase();
+      const raw = safeParseRawData(order.rawData);
+      const haystack = [
+        order.orderNumber,
+        order.productName,
+        order.invoiceNumber,
+        raw.carrier,
+        raw.sourceOrderNumber,
+        raw.ordOptNo,
+        raw.optionName,
+        raw.brandName
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
       if (!haystack.includes(search)) return false;
     }
 
@@ -115,6 +160,8 @@ export default function SiteDetailPage() {
   const [site, setSite] = useState<Site | null>(null);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [logs, setLogs] = useState<ExtractionLogRow[]>([]);
+  const [logTotal, setLogTotal] = useState(0);
   const [filters, setFilters] = useState<OrderFilterState>(defaultOrderFilters);
   const [message, setMessage] = useState("");
   const [runningRunId, setRunningRunId] = useState<string | null>(null);
@@ -136,21 +183,32 @@ export default function SiteDetailPage() {
       siteId,
       page: 1,
       pageSize: 500
-    } as any)) as OrdersResult;
+    })) as OrdersResult;
 
     setOrders(result.items ?? []);
     setTotal(result.total ?? 0);
   }, [siteId]);
 
+  const loadLogs = useCallback(async () => {
+    const result = (await window.api.logs.listBySite({
+      siteId,
+      page: 1,
+      pageSize: 10
+    })) as LogsResult;
+
+    setLogs(result.items ?? []);
+    setLogTotal(result.total ?? 0);
+  }, [siteId]);
+
   const loadData = useCallback(async () => {
     try {
-      await Promise.all([loadSite(), loadOrders()]);
+      await Promise.all([loadSite(), loadOrders(), loadLogs()]);
       setMessage("Site detail loaded");
     } catch (error) {
       console.error(error);
       setMessage(error instanceof Error ? error.message : "Failed to load site detail");
     }
-  }, [loadSite, loadOrders]);
+  }, [loadSite, loadOrders, loadLogs]);
 
   useEffect(() => {
     if (Number.isFinite(siteId)) {
@@ -168,6 +226,7 @@ export default function SiteDetailPage() {
 
       if (item.phase === "saving" || item.phase === "success") {
         void loadOrders();
+        void loadLogs();
       }
 
       if (
@@ -181,7 +240,12 @@ export default function SiteDetailPage() {
     });
 
     return () => unsubscribe();
-  }, [siteId, loadOrders]);
+  }, [siteId, loadOrders, loadLogs]);
+
+  const handleRefreshOrders = async () => {
+    await loadOrders();
+    await loadLogs();
+  };
 
   const handleExtract = async () => {
     setMessage("Starting extractor...");
@@ -226,7 +290,7 @@ export default function SiteDetailPage() {
   return (
     <AppShell
       title="Site Detail"
-      description="사이트별 주문, 추출 진행상황, CSV export를 확인합니다."
+      description="사이트별 주문, 추출 진행상황, 추출 로그, CSV export를 확인합니다."
     >
       {message ? (
         <div className="mb-6 rounded-2xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm font-medium text-blue-800">
@@ -302,7 +366,7 @@ export default function SiteDetailPage() {
             <OrderTable
               orders={filteredOrders}
               total={filteredOrders.length}
-              onRefresh={loadOrders}
+              onRefresh={handleRefreshOrders}
               onExportCsv={handleExportCsv}
             />
 
@@ -312,6 +376,13 @@ export default function SiteDetailPage() {
               onClear={() => setProgressItems([])}
             />
           </section>
+
+          <ExtractionLogTable
+            logs={logs}
+            total={logTotal}
+            title="Site Extraction Logs"
+            onRefresh={loadLogs}
+          />
         </div>
       )}
     </AppShell>

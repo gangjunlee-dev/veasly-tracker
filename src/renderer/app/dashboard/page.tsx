@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
+import { ExtractionLogTable, type ExtractionLogRow } from "../../components/ExtractionLogTable";
 import {
   defaultOrderFilters,
   OrderFilters,
@@ -24,6 +25,11 @@ type OrdersResult = {
   items: OrderRow[];
 };
 
+type LogsResult = {
+  total: number;
+  items: ExtractionLogRow[];
+};
+
 function downloadTextFile(filename: string, content: string) {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -43,6 +49,17 @@ function toCsvValue(value: unknown) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
+function safeParseRawData(rawData?: string | null): Record<string, unknown> {
+  if (!rawData) return {};
+
+  try {
+    const parsed = JSON.parse(rawData);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function buildOrdersCsv(orders: OrderRow[]) {
   const header = [
     "siteId",
@@ -52,19 +69,33 @@ function buildOrdersCsv(orders: OrderRow[]) {
     "quantity",
     "amount",
     "shippingStatus",
-    "invoiceNumber"
+    "carrier",
+    "invoiceNumber",
+    "sourceOrderNumber",
+    "ordOptNo",
+    "optionName",
+    "brandName"
   ];
 
-  const rows = orders.map((order) => [
-    order.siteId,
-    order.orderNumber,
-    order.orderDate ?? "",
-    order.productName,
-    order.quantity ?? "",
-    order.amount ?? "",
-    order.shippingStatus ?? "",
-    order.invoiceNumber ?? ""
-  ]);
+  const rows = orders.map((order) => {
+    const raw = safeParseRawData(order.rawData);
+
+    return [
+      order.siteId,
+      order.orderNumber,
+      order.orderDate ?? "",
+      order.productName,
+      order.quantity ?? "",
+      order.amount ?? "",
+      order.shippingStatus ?? "",
+      typeof raw.carrier === "string" ? raw.carrier : "",
+      order.invoiceNumber ?? "",
+      typeof raw.sourceOrderNumber === "string" ? raw.sourceOrderNumber : "",
+      typeof raw.ordOptNo === "string" ? raw.ordOptNo : "",
+      typeof raw.optionName === "string" ? raw.optionName : "",
+      typeof raw.brandName === "string" ? raw.brandName : ""
+    ];
+  });
 
   return [header, ...rows]
     .map((row) => row.map(toCsvValue).join(","))
@@ -88,7 +119,21 @@ function filterOrders(orders: OrderRow[], filters: OrderFilterState) {
 
   return orders.filter((order) => {
     if (search) {
-      const haystack = `${order.orderNumber} ${order.productName}`.toLowerCase();
+      const raw = safeParseRawData(order.rawData);
+      const haystack = [
+        order.orderNumber,
+        order.productName,
+        order.invoiceNumber,
+        raw.carrier,
+        raw.sourceOrderNumber,
+        raw.ordOptNo,
+        raw.optionName,
+        raw.brandName
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
       if (!haystack.includes(search)) return false;
     }
 
@@ -113,6 +158,8 @@ export default function DashboardPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [orderTotal, setOrderTotal] = useState(0);
+  const [logs, setLogs] = useState<ExtractionLogRow[]>([]);
+  const [logTotal, setLogTotal] = useState(0);
   const [filters, setFilters] = useState<OrderFilterState>(defaultOrderFilters);
   const [statusMessage, setStatusMessage] = useState("");
 
@@ -125,15 +172,24 @@ export default function DashboardPage() {
       (sum, order) => sum + Number(order.amount ?? 0),
       0
     );
+    const paid = filteredOrders.filter((order) => order.shippingStatus === "PAID").length;
     const ready = filteredOrders.filter((order) => order.shippingStatus === "READY").length;
     const shipped = filteredOrders.filter((order) => order.shippingStatus === "SHIPPED").length;
+    const delivered = filteredOrders.filter((order) => order.shippingStatus === "DELIVERED").length;
     const pending = filteredOrders.filter((order) => order.shippingStatus === "PENDING").length;
+    const noTracking = filteredOrders.filter((order) => {
+      const raw = safeParseRawData(order.rawData);
+      return raw.noTracking === true;
+    }).length;
 
     return {
       totalAmount,
+      paid,
       ready,
       shipped,
-      pending
+      delivered,
+      pending,
+      noTracking
     };
   }, [filteredOrders]);
 
@@ -147,6 +203,16 @@ export default function DashboardPage() {
     setOrderTotal(result.total ?? 0);
   }, []);
 
+  const loadLogs = useCallback(async () => {
+    const result = (await window.api.logs.list({
+      page: 1,
+      pageSize: 10
+    })) as LogsResult;
+
+    setLogs(result.items ?? []);
+    setLogTotal(result.total ?? 0);
+  }, []);
+
   const loadData = useCallback(async () => {
     try {
       const [pong, siteList] = await Promise.all([
@@ -156,7 +222,9 @@ export default function DashboardPage() {
 
       setPing(String(pong));
       setSites(siteList as Site[]);
-      await loadOrders();
+
+      await Promise.all([loadOrders(), loadLogs()]);
+
       setStatusMessage("Dashboard loaded");
     } catch (error) {
       console.error(error);
@@ -164,11 +232,16 @@ export default function DashboardPage() {
         error instanceof Error ? error.message : "Failed to load dashboard"
       );
     }
-  }, [loadOrders]);
+  }, [loadOrders, loadLogs]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  const handleRefreshOrders = async () => {
+    await loadOrders();
+    await loadLogs();
+  };
 
   const handleExportCsv = async () => {
     setStatusMessage("Exporting filtered CSV...");
@@ -217,14 +290,23 @@ export default function DashboardPage() {
           value=" "
           helper={
             <div className="flex flex-wrap gap-2 text-xs font-bold">
+              <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-indigo-700">
+                PAID {dashboard.paid}
+              </span>
               <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">
                 READY {dashboard.ready}
               </span>
               <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">
                 SHIPPED {dashboard.shipped}
               </span>
+              <span className="rounded-full bg-green-50 px-2.5 py-1 text-green-700">
+                DELIVERED {dashboard.delivered}
+              </span>
               <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">
                 PENDING {dashboard.pending}
+              </span>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-700">
+                NO TRACKING {dashboard.noTracking}
               </span>
             </div>
           }
@@ -246,8 +328,17 @@ export default function DashboardPage() {
         <OrderTable
           orders={filteredOrders}
           total={filteredOrders.length}
-          onRefresh={loadOrders}
+          onRefresh={handleRefreshOrders}
           onExportCsv={handleExportCsv}
+        />
+      </section>
+
+      <section className="mt-6">
+        <ExtractionLogTable
+          logs={logs}
+          total={logTotal}
+          title="Recent Extraction Logs"
+          onRefresh={loadLogs}
         />
       </section>
     </AppShell>
