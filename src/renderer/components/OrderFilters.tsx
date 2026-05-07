@@ -25,10 +25,13 @@ type OrderFiltersProps = {
 
 const statusOptions = [
   { label: "All", value: "ALL" },
-  { label: "READY", value: "READY" },
-  { label: "SHIPPED", value: "SHIPPED" },
-  { label: "PENDING", value: "PENDING" },
-  { label: "CANCELLED", value: "CANCELLED" }
+  { label: "결제완료", value: "PAID" },
+  { label: "출고준비", value: "READY" },
+  { label: "배송중", value: "SHIPPED" },
+  { label: "배송완료", value: "DELIVERED" },
+  { label: "대기", value: "PENDING" },
+  { label: "결제오류", value: "PAYMENT_ERROR" },
+  { label: "취소", value: "CANCELLED" }
 ];
 
 export const defaultOrderFilters: OrderFilterState = {
