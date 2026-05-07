@@ -34,6 +34,13 @@ type LogsResult = {
   items: ExtractionLogRow[];
 };
 
+type ExtractOptionState = {
+  maxPages: string;
+  since: string;
+  until: string;
+  includeNoTracking: boolean;
+};
+
 function downloadTextFile(filename: string, content: string) {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -163,6 +170,12 @@ export default function SiteDetailPage() {
   const [logs, setLogs] = useState<ExtractionLogRow[]>([]);
   const [logTotal, setLogTotal] = useState(0);
   const [filters, setFilters] = useState<OrderFilterState>(defaultOrderFilters);
+  const [extractOptions, setExtractOptions] = useState<ExtractOptionState>({
+    maxPages: "10",
+    since: "",
+    until: "",
+    includeNoTracking: true
+  });
   const [message, setMessage] = useState("");
   const [runningRunId, setRunningRunId] = useState<string | null>(null);
   const [progressItems, setProgressItems] = useState<ProgressItem[]>([]);
@@ -251,7 +264,17 @@ export default function SiteDetailPage() {
     setMessage("Starting extractor...");
 
     try {
-      const result = (await window.api.extractor.run({ siteId })) as { runId: string };
+      const maxPages = Number(extractOptions.maxPages);
+
+      const result = (await window.api.extractor.run({
+        siteId,
+        options: {
+          maxPages: Number.isFinite(maxPages) && maxPages > 0 ? maxPages : undefined,
+          since: extractOptions.since || undefined,
+          until: extractOptions.until || undefined,
+          includeNoTracking: extractOptions.includeNoTracking
+        }
+      })) as { runId: string };
 
       setRunningRunId(result.runId);
       setProgressItems((current) => [
@@ -355,6 +378,101 @@ export default function SiteDetailPage() {
             </div>
           </div>
 
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Extraction Options</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  주문 상세 조회 범위와 송장 없는 주문 저장 여부를 설정합니다.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setExtractOptions({
+                    maxPages: "10",
+                    since: "",
+                    until: "",
+                    includeNoTracking: true
+                  })
+                }
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Reset Options
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-3 md:grid-cols-4">
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Max Detail Orders
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={extractOptions.maxPages}
+                  onChange={(event) =>
+                    setExtractOptions((current) => ({
+                      ...current,
+                      maxPages: event.target.value
+                    }))
+                  }
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Since
+                </label>
+                <input
+                  type="date"
+                  value={extractOptions.since}
+                  onChange={(event) =>
+                    setExtractOptions((current) => ({
+                      ...current,
+                      since: event.target.value
+                    }))
+                  }
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Until
+                </label>
+                <input
+                  type="date"
+                  value={extractOptions.until}
+                  onChange={(event) =>
+                    setExtractOptions((current) => ({
+                      ...current,
+                      until: event.target.value
+                    }))
+                  }
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
+                />
+              </div>
+
+              <label className="flex items-end gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={extractOptions.includeNoTracking}
+                  onChange={(event) =>
+                    setExtractOptions((current) => ({
+                      ...current,
+                      includeNoTracking: event.target.checked
+                    }))
+                  }
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                <span>Include No Tracking</span>
+              </label>
+            </div>
+          </section>
           <OrderFilters
             value={filters}
             onChange={setFilters}

@@ -23,7 +23,8 @@ const RunExtractorSchema = z.object({
       since: z.string().optional(),
       until: z.string().optional(),
       maxPages: z.number().int().positive().optional(),
-      lastOrderDate: z.string().optional()
+      lastOrderDate: z.string().optional(),
+      includeNoTracking: z.boolean().optional()
     })
     .optional()
 });

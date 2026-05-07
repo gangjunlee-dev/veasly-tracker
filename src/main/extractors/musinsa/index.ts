@@ -582,6 +582,7 @@ async function extractOrdersFromDetailPage(
   page: Page,
   detailUrl: string,
   detailIndex: number,
+  includeNoTracking: boolean,
   progress?: ProgressReporter
 ): Promise<StandardOrder[]> {
   await page.goto(detailUrl, {
@@ -620,7 +621,7 @@ async function extractOrdersFromDetailPage(
   });
 
   if (firstTargets.length === 0) {
-    if (detailItems.length > 0) {
+    if (includeNoTracking && detailItems.length > 0) {
       progress?.({
         runId: "",
         siteId: 0,
@@ -797,7 +798,7 @@ class MusinsaExtractor extends BaseExtractor {
 
   async extractOrders(
     page: Page,
-    _options: ExtractionOptions,
+    options: ExtractionOptions,
     progress?: ProgressReporter
   ): Promise<StandardOrder[]> {
     progress?.({
@@ -816,8 +817,11 @@ class MusinsaExtractor extends BaseExtractor {
     await page.waitForTimeout(3000);
 
     const detailLinks = await collectDetailLinks(page);
-    const maxDetails = Math.min(detailLinks.length, 10);
+    const requestedMaxDetails =
+      options.maxPages && options.maxPages > 0 ? options.maxPages : 10;
+    const maxDetails = Math.min(detailLinks.length, requestedMaxDetails);
     const targetLinks = detailLinks.slice(0, maxDetails);
+    const includeNoTracking = options.includeNoTracking ?? true;
 
     if (targetLinks.length === 0) {
       progress?.({
@@ -860,6 +864,7 @@ class MusinsaExtractor extends BaseExtractor {
         page,
         detailLink.url,
         i + 1,
+        includeNoTracking,
         progress
       );
 
