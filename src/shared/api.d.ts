@@ -117,6 +117,31 @@ export type ExtractionProgress = {
   ordersFound?: number;
   createdAt: string;
 };
+export type ExtractionLog = {
+  id: number;
+  siteId: number;
+  siteName?: string;
+  siteCode?: string;
+  status: "running" | "success" | "failed" | "cancelled" | string;
+  startedAt: string;
+  finishedAt: string | null;
+  message: string | null;
+  totalOrders: number;
+  newOrders: number;
+  updatedOrders: number;
+  savedOrders: number;
+  errorStack: string | null;
+  createdAt: string;
+};
+
+export type ListExtractionLogsInput = {
+  page?: number;
+  pageSize?: number;
+};
+
+export type ListExtractionLogsBySiteInput = ListExtractionLogsInput & {
+  siteId: number;
+};
 
 declare global {
   interface Window {
@@ -143,7 +168,14 @@ declare global {
         ) => Promise<PaginatedResult<Order>>;
         export: (input: ExportOrdersInput) => Promise<string>;
       };
-      extractor: {
+      logs: {
+        list: (
+          input?: ListExtractionLogsInput
+        ) => Promise<PaginatedResult<ExtractionLog>>;
+        listBySite: (
+          input: ListExtractionLogsBySiteInput
+        ) => Promise<PaginatedResult<ExtractionLog>>;
+      };      extractor: {
         available: () => Promise<ExtractorConfig[]>;
         run: (input: {
           siteId: number;

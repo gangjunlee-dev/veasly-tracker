@@ -4,6 +4,7 @@ import { closeDb } from "./db/client";
 import { registerSitesIpc } from "./ipc/sites";
 import { registerOrdersIpc } from "./ipc/orders";
 import { registerExtractorIpc } from "./ipc/extractor";
+import { registerLogsIpc } from "./ipc/logs";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -22,6 +23,7 @@ function registerIpc() {
   registerSitesIpc();
   registerOrdersIpc();
   registerExtractorIpc();
+  registerLogsIpc();
 }
 
 function createMainWindow() {

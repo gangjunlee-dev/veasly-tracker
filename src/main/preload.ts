@@ -6,6 +6,8 @@ import type {
   ExtractionOptions,
   ExtractionProgress,
   ListAllOrdersInput,
+  ListExtractionLogsInput,
+  ListExtractionLogsBySiteInput,
   ListOrdersBySiteInput,
   UpdateSiteInput
 } from "../shared/api";
@@ -29,7 +31,12 @@ const api = {
     export: (input: ExportOrdersInput) =>
       ipcRenderer.invoke("orders:export", input)
   },
-  extractor: {
+  logs: {
+    list: (input?: ListExtractionLogsInput) =>
+      ipcRenderer.invoke("logs:list", input ?? {}),
+    listBySite: (input: ListExtractionLogsBySiteInput) =>
+      ipcRenderer.invoke("logs:listBySite", input)
+  },  extractor: {
     available: () => ipcRenderer.invoke("extractor:available"),
     run: (input: { siteId: number; options?: ExtractionOptions }) =>
       ipcRenderer.invoke("extractor:run", input),
