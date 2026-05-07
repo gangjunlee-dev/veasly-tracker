@@ -165,6 +165,140 @@ function parseDetailItemFromText(containerText: string, fallbackIndex: number): 
   };
 }
 
+function parseQuantityAndOption(line?: string): {
+  optionName?: string;
+  quantity: number;
+} {
+  if (!line) {
+    return {
+      quantity: 1
+    };
+  }
+
+  const quantityMatch = line.match(/(\d+)\s*개/);
+  const quantity = quantityMatch?.[1] ? Number(quantityMatch[1]) : 1;
+
+  const optionName = line
+    .replace(/\/?\s*\d+\s*개/g, "")
+    .replace(/^옵션\s*[:：]?/g, "")
+    .replace(/^선택\s*[:：]?/g, "")
+    .trim();
+
+  return {
+    optionName: optionName || undefined,
+    quantity
+  };
+}
+
+function isLikelyProductAmountLine(line: string, previousLine?: string): boolean {
+  if (!/\d{1,3}(,\d{3})*\s*원/.test(line) && !/\d+\s*원/.test(line)) {
+    return false;
+  }
+
+  if (!previousLine || !/(\d+)\s*개/.test(previousLine)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isInvalidProductName(line?: string): boolean {
+  if (!line) return true;
+
+  return [
+    /판매자\s*정보/,
+    /상품\s*정보/,
+    /배송\s*정보/,
+    /결제\s*정보/,
+    /주문\s*상품/,
+    /주문번호/,
+    /취소\s*요청/,
+    /스냅\s*보기/,
+    /영수증/,
+    /거래명세서/,
+    /무료배송/,
+    /무신사/,
+    /^\d{1,3}(,\d{3})*\s*원$/,
+    /^\d+\s*개$/
+  ].some((pattern) => pattern.test(line));
+}
+
+function cleanProductName(line: string): string {
+  return line
+    .replace(/\s*\/\s*\d+\s*개\s*$/g, "")
+    .trim();
+}
+
+function parseDetailItemsFromBodyText(
+  bodyText: string,
+  _sourceOrderNumber: string
+): ParsedDetailItem[] {
+  const lines = normalizeLines(bodyText);
+
+  const globalStatusLine =
+    lines.find((line) =>
+      /결제\s*완료|상품\s*준비\s*중|출고\s*예정|배송\s*시작|배송\s*중|배송\s*완료|구매\s*확정|결제오류|결제\s*오류|취소/.test(
+        line
+      )
+    ) || undefined;
+
+  const globalShippingMessage =
+    lines.find((line) =>
+      /도착보장|도착\s*예정|이내\s*도착|내일.*도착|오늘.*도착|출고\s*예정/.test(
+        line
+      )
+    ) || undefined;
+
+  const items: ParsedDetailItem[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const amountLine = lines[i];
+    const optionLine = lines[i - 1];
+
+    if (!isLikelyProductAmountLine(amountLine, optionLine)) {
+      continue;
+    }
+
+    let productName = cleanProductName(lines[i - 2] || "");
+
+    if (isInvalidProductName(productName)) {
+      productName = cleanProductName(lines[i - 3] || "");
+    }
+
+    if (isInvalidProductName(productName)) {
+      productName = `Musinsa Item ${items.length + 1}`;
+    }
+
+    const sellerInfoIndex = i - 3;
+    const possibleBrand =
+      sellerInfoIndex >= 1 && /판매자\s*정보/.test(lines[sellerInfoIndex])
+        ? lines[sellerInfoIndex - 1]
+        : undefined;
+
+    const brandName =
+      possibleBrand && !isInvalidProductName(possibleBrand)
+        ? possibleBrand
+        : undefined;
+
+    const quantityAndOption = parseQuantityAndOption(optionLine);
+    const amount = parseMoney(amountLine);
+    const statusSource = `${globalStatusLine || ""}\n${globalShippingMessage || ""}\n${lines
+      .slice(Math.max(0, i - 6), i + 2)
+      .join("\n")}`;
+
+    items.push({
+      brandName,
+      productName,
+      optionName: quantityAndOption.optionName,
+      quantity: quantityAndOption.quantity,
+      amount,
+      shippingStatus: mapMusinsaStatus(statusSource),
+      shippingMessage: globalShippingMessage || globalStatusLine
+    });
+  }
+
+  return items;
+}
 async function getBodyText(page: Page): Promise<string> {
   try {
     return await page.locator("body").innerText({ timeout: 5000 });
@@ -465,6 +599,7 @@ async function extractOrdersFromDetailPage(
     `UNKNOWN-${detailIndex}`;
 
   const orderDate = orderDateFromSourceOrderNumber(sourceOrderNumber);
+  const detailItems = parseDetailItemsFromBodyText(bodyText, sourceOrderNumber);
 
   progress?.({
     runId: "",
@@ -485,13 +620,53 @@ async function extractOrdersFromDetailPage(
   });
 
   if (firstTargets.length === 0) {
+    if (detailItems.length > 0) {
+      progress?.({
+        runId: "",
+        siteId: 0,
+        siteCode: config.code,
+        phase: "extracting",
+        message: `배송조회 없음: ${sourceOrderNumber} / 상품 ${detailItems.length}건을 송장 없이 저장합니다.`
+      });
+
+      return detailItems.map((item, index) => {
+        const lineIndex = index + 1;
+
+        return {
+          orderNumber: makeMusinsaOrderNumber(sourceOrderNumber, lineIndex),
+          orderDate,
+          productName: item.productName,
+          quantity: item.quantity,
+          amount: item.amount,
+          currency: "KRW",
+          invoiceNumber: undefined,
+          invoiceUrl: undefined,
+          shippingStatus: item.shippingStatus,
+          rawData: JSON.stringify({
+            source: "musinsa",
+            sourceOrderNumber,
+            lineIndex,
+            brandName: item.brandName,
+            optionName: item.optionName,
+            carrier: undefined,
+            trackingNumber: undefined,
+            shippingMessage: item.shippingMessage,
+            detailUrl,
+            trackingUrl: undefined,
+            noTracking: true
+          })
+        };
+      });
+    }
+
     progress?.({
       runId: "",
       siteId: 0,
       siteCode: config.code,
       phase: "extracting",
-      message: `배송조회 버튼/URL을 찾지 못했습니다: ${sourceOrderNumber}`
+      message: `배송조회 버튼/URL과 상품 row를 모두 찾지 못했습니다: ${sourceOrderNumber}`
     });
+
     return [];
   }
 
@@ -520,7 +695,7 @@ async function extractOrdersFromDetailPage(
     }
 
     const lineIndex = i + 1;
-    const item = parseDetailItemFromText(trackingTarget.containerText, lineIndex);
+    const item = detailItems[i] ?? parseDetailItemFromText(trackingTarget.containerText, lineIndex);
 
     progress?.({
       runId: "",
