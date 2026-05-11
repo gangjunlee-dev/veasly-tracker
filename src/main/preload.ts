@@ -8,6 +8,9 @@ import type {
   ListAllOrdersInput,
   ListExtractionLogsInput,
   ListExtractionLogsBySiteInput,
+  ListInboundScansInput,
+  WarehouseAutoMatchInput,
+  WarehouseScanInboundInput,
   ListOrdersBySiteInput,
   UpdateSiteInput
 } from "../shared/api";
@@ -31,12 +34,23 @@ const api = {
     export: (input: ExportOrdersInput) =>
       ipcRenderer.invoke("orders:export", input)
   },
+  warehouse: {
+    scanInbound: (input: WarehouseScanInboundInput) =>
+      ipcRenderer.invoke("warehouse:scanInbound", input),
+    listInboundScans: (input?: ListInboundScansInput) =>
+      ipcRenderer.invoke("warehouse:listInboundScans", input ?? {}),
+    autoMatch: (input?: WarehouseAutoMatchInput) =>
+      ipcRenderer.invoke("warehouse:autoMatch", input ?? {}),
+    findOrdersByTracking: (input: WarehouseScanInboundInput) =>
+      ipcRenderer.invoke("warehouse:findOrdersByTracking", input)
+  },
   logs: {
     list: (input?: ListExtractionLogsInput) =>
       ipcRenderer.invoke("logs:list", input ?? {}),
     listBySite: (input: ListExtractionLogsBySiteInput) =>
       ipcRenderer.invoke("logs:listBySite", input)
-  },  extractor: {
+  },
+  extractor: {
     available: () => ipcRenderer.invoke("extractor:available"),
     run: (input: { siteId: number; options?: ExtractionOptions }) =>
       ipcRenderer.invoke("extractor:run", input),

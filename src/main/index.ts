@@ -5,6 +5,7 @@ import { registerSitesIpc } from "./ipc/sites";
 import { registerOrdersIpc } from "./ipc/orders";
 import { registerExtractorIpc } from "./ipc/extractor";
 import { registerLogsIpc } from "./ipc/logs";
+import { registerWarehouseIpc } from "./ipc/warehouse";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -24,6 +25,7 @@ function registerIpc() {
   registerOrdersIpc();
   registerExtractorIpc();
   registerLogsIpc();
+  registerWarehouseIpc();
 }
 
 function createMainWindow() {

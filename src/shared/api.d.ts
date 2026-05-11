@@ -42,6 +42,9 @@ export type Order = {
   invoiceNumber: string | null;
   invoiceUrl: string | null;
   shippingStatus: string | null;
+  warehouseStatus?: string;
+  warehouseArrivedAt?: string | null;
+  warehouseScanId?: number | null;
   rawData: string | null;
   createdAt: string;
   updatedAt: string;
@@ -144,6 +147,88 @@ export type ListExtractionLogsBySiteInput = ListExtractionLogsInput & {
   siteId: number;
 };
 
+
+export type WarehouseInboundScan = {
+  id: number;
+  trackingNumber: string;
+  normalizedTrackingNumber: string;
+  carrier: string | null;
+  rawInput: string | null;
+  status: "SCANNED" | "MATCHED" | "UNMATCHED" | "DUPLICATE" | "IGNORED" | "ISSUE" | string;
+  matchedOrderCount: number;
+  scanCount: number;
+  scannedAt: string;
+  lastScannedAt: string | null;
+  matchedAt: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WarehouseMatchedOrder = {
+  id: number;
+  siteId: number;
+  siteName?: string;
+  siteCode?: string;
+  orderNumber: string;
+  orderDate: string;
+  productName: string;
+  quantity: number;
+  amount: number;
+  currency: string;
+  invoiceNumber: string | null;
+  invoiceUrl: string | null;
+  shippingStatus: string | null;
+  warehouseStatus: string;
+  warehouseArrivedAt: string | null;
+  warehouseScanId: number | null;
+  carrier: string | null;
+  trackingNumber: string | null;
+  sourceOrderNumber: string | null;
+  ordOptNo: string | null;
+  brandName: string | null;
+  optionName: string | null;
+};
+
+export type WarehouseScanInboundInput = {
+  trackingNumber: string;
+  carrier?: string;
+  note?: string;
+};
+
+export type ListInboundScansInput = {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  search?: string;
+};
+
+export type WarehouseInboundScanListResult = PaginatedResult<WarehouseInboundScan> & {
+  summary: Record<string, number>;
+};
+
+export type WarehouseScanInboundResult = {
+  result: "SCANNED" | "DUPLICATE" | string;
+  message: string;
+  scan: WarehouseInboundScan | null;
+  matchedOrders: WarehouseMatchedOrder[];
+};
+
+export type WarehouseAutoMatchInput = {
+  scanId?: number;
+};
+
+export type WarehouseAutoMatchResult = {
+  scannedCount: number;
+  matchedScanCount: number;
+  unmatchedScanCount: number;
+  matchedOrderCount: number;
+};
+
+export type WarehouseFindOrdersByTrackingResult = {
+  trackingNumber: string;
+  items: WarehouseMatchedOrder[];
+};
 declare global {
   interface Window {
     api: {
@@ -169,6 +254,20 @@ declare global {
         ) => Promise<PaginatedResult<Order>>;
         export: (input: ExportOrdersInput) => Promise<string>;
       };
+      warehouse: {
+        scanInbound: (
+          input: WarehouseScanInboundInput
+        ) => Promise<WarehouseScanInboundResult>;
+        listInboundScans: (
+          input?: ListInboundScansInput
+        ) => Promise<WarehouseInboundScanListResult>;
+        autoMatch: (
+          input?: WarehouseAutoMatchInput
+        ) => Promise<WarehouseAutoMatchResult>;
+        findOrdersByTracking: (
+          input: WarehouseScanInboundInput
+        ) => Promise<WarehouseFindOrdersByTrackingResult>;
+      };
       logs: {
         list: (
           input?: ListExtractionLogsInput
@@ -176,7 +275,8 @@ declare global {
         listBySite: (
           input: ListExtractionLogsBySiteInput
         ) => Promise<PaginatedResult<ExtractionLog>>;
-      };      extractor: {
+      };
+      extractor: {
         available: () => Promise<ExtractorConfig[]>;
         run: (input: {
           siteId: number;

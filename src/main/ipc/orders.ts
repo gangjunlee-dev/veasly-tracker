@@ -43,6 +43,9 @@ function mapOrderRow(row: Record<string, unknown>) {
     invoiceNumber: row.invoice_number ? String(row.invoice_number) : null,
     invoiceUrl: row.invoice_url ? String(row.invoice_url) : null,
     shippingStatus: row.shipping_status ? String(row.shipping_status) : null,
+    warehouseStatus: row.warehouse_status ? String(row.warehouse_status) : "NOT_ARRIVED",
+    warehouseArrivedAt: row.warehouse_arrived_at ? String(row.warehouse_arrived_at) : null,
+    warehouseScanId: row.warehouse_scan_id ? Number(row.warehouse_scan_id) : null,
     rawData: row.raw_data ? String(row.raw_data) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
