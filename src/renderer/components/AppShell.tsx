@@ -21,6 +21,11 @@ const navItems = [
     href: "/sites",
     label: "Sites",
     description: "쇼핑몰 계정 / 추출"
+  },
+  {
+    href: "/warehouse/inbound",
+    label: "Warehouse",
+    description: "창고 입고 스캔"
   }
 ];
 
@@ -82,7 +87,7 @@ export function AppShell({
             <div className="mt-8 rounded-2xl bg-blue-50 p-4 text-xs leading-5 text-blue-700">
               <div className="font-bold">MVP Status</div>
               <div className="mt-1">
-                DB · IPC · Extractor · Orders · CSV export ready
+                Extractor · Orders · Warehouse · CSV ready
               </div>
             </div>
           </div>
