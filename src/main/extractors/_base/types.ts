@@ -27,6 +27,7 @@ export type ExtractionOptions = {
   maxPages?: number;
   lastOrderDate?: string;
   includeNoTracking?: boolean;
+  headless?: boolean;
 };
 
 export type Credentials = {

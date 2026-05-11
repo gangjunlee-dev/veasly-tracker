@@ -917,14 +917,44 @@ class MusinsaExtractor extends BaseExtractor {
       timeout: 60000
     });
 
-    const passwordInputs = await page.locator("input[type='password']").count().catch(() => 0);
-    const bodyText = await getBodyText(page);
-    const detailLinks = await collectDetailLinks(page).catch(() => []);
+    await page.waitForLoadState("domcontentloaded").catch(() => undefined);
 
-    return (
-      passwordInputs === 0 &&
-      (detailLinks.length > 0 || /주문\s*상세|배송\s*조회|배송조회|주문번호/.test(bodyText))
-    );
+    const maxWaitMs = 10000;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < maxWaitMs) {
+      const url = page.url();
+
+      const passwordInputs = await page
+        .locator("input[type='password']")
+        .count()
+        .catch(() => 0);
+
+      const bodyText = await getBodyText(page);
+      const detailLinks = await collectDetailLinks(page).catch(() => []);
+
+      const looksLoggedIn =
+        passwordInputs === 0 &&
+        (detailLinks.length > 0 ||
+          /주문\s*상세|배송\s*조회|배송조회|주문번호|주문\s*상품|주문\s*내역/.test(bodyText));
+
+      if (looksLoggedIn) {
+        return true;
+      }
+
+      const looksLikeLogin =
+        passwordInputs > 0 ||
+        /login|signin|member\/login/i.test(url) ||
+        /로그인|아이디|비밀번호/.test(bodyText);
+
+      if (looksLikeLogin && Date.now() - startedAt > 3000) {
+        return false;
+      }
+
+      await page.waitForTimeout(800);
+    }
+
+    return false;
   }
 
   async extractOrders(

@@ -39,6 +39,7 @@ type ExtractOptionState = {
   since: string;
   until: string;
   includeNoTracking: boolean;
+  headless: boolean;
 };
 
 function downloadTextFile(filename: string, content: string) {
@@ -198,7 +199,8 @@ export default function SiteDetailPage() {
     maxPages: "10",
     since: "",
     until: "",
-    includeNoTracking: true
+    includeNoTracking: true,
+    headless: false
   });
   const [message, setMessage] = useState("");
   const [runningRunId, setRunningRunId] = useState<string | null>(null);
@@ -296,7 +298,8 @@ export default function SiteDetailPage() {
           maxPages: Number.isFinite(maxPages) && maxPages > 0 ? maxPages : undefined,
           since: extractOptions.since || undefined,
           until: extractOptions.until || undefined,
-          includeNoTracking: extractOptions.includeNoTracking
+          includeNoTracking: extractOptions.includeNoTracking,
+          headless: extractOptions.headless
         }
       })) as { runId: string };
 
@@ -421,7 +424,8 @@ export default function SiteDetailPage() {
                     maxPages: "10",
                     since: "",
                     until: "",
-                    includeNoTracking: true
+                    includeNoTracking: true,
+    headless: false
                   })
                 }
                 className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
@@ -430,7 +434,7 @@ export default function SiteDetailPage() {
               </button>
             </div>
 
-            <div className="mt-5 grid gap-3 md:grid-cols-4">
+            <div className="mt-5 grid gap-3 md:grid-cols-5">
               <div>
                 <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
                   Max Detail Orders
@@ -497,6 +501,26 @@ export default function SiteDetailPage() {
                   className="h-4 w-4 rounded border-slate-300"
                 />
                 <span>Include No Tracking</span>
+              </label>
+
+              <label className="flex items-end gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={extractOptions.headless}
+                  onChange={(event) =>
+                    setExtractOptions((current) => ({
+                      ...current,
+                      headless: event.target.checked
+                    }))
+                  }
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                <span>
+                  Run in background
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    저장된 로그인 세션으로 브라우저를 최소화하여 추출합니다.
+                  </span>
+                </span>
               </label>
             </div>
           </section>

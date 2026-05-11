@@ -24,7 +24,8 @@ const RunExtractorSchema = z.object({
       until: z.string().optional(),
       maxPages: z.number().int().positive().optional(),
       lastOrderDate: z.string().optional(),
-      includeNoTracking: z.boolean().optional()
+      includeNoTracking: z.boolean().optional(),
+      headless: z.boolean().optional()
     })
     .optional()
 });
@@ -236,6 +237,13 @@ async function runExtraction(input: {
   const logId = createLog(site.id);
   const extractor = getExtractor(site.code);
 
+  // Musinsa does not reliably support pure headless/background login checks.
+  // Treat background mode as a persistent headed-browser automation mode.
+  const effectiveOptions = {
+    ...input.options,
+    headless: false
+  };
+
   runningJobs.set(input.runId, {
     abortController: input.abortController,
     extractor
@@ -272,12 +280,11 @@ async function runExtraction(input: {
       throw new Error("Extraction cancelled");
     }
 
-    report("browser", "Launching browser");
-    const browser = await extractor.launchBrowser();
-    const context = await browser.newContext();
+    const headless = effectiveOptions.headless ?? false;
+    report("browser", headless ? "Launching browser with persistent profile" : "Launching browser");
+    const context = await extractor.launchPersistentContext(effectiveOptions);
 
-    report("session", "Loading encrypted session cookies");
-    await extractor.loadSession(context);
+    report("session", "Using persistent browser profile");
 
     const page = await context.newPage();
 
@@ -286,11 +293,15 @@ async function runExtraction(input: {
 
     if (!loggedIn) {
       report("login", "Login required");
+      report("login", "Opening browser for login with persistent profile");
+
       await extractor.login(page, credentials, input.sendProgress);
       await extractor.saveSession(context);
       report("session", "Session saved");
     } else {
       report("login", "Already logged in");
+      await extractor.saveSession(context);
+      report("session", "Session refreshed");
     }
 
     if (input.abortController.signal.aborted) {
@@ -300,7 +311,7 @@ async function runExtraction(input: {
     report("extracting", "Extracting orders");
     const orders = await extractor.extractOrders(
       page,
-      input.options,
+      effectiveOptions,
       input.sendProgress
     );
 
