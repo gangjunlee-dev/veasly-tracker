@@ -29,15 +29,47 @@ export function parseMoney(input?: string): number {
   return n ? Number(n) : 0;
 }
 
-export function mapMusinsaStatus(text?: string): string {
-  const value = text || "";
+export function mapMusinsaStatus(text: string): string {
+  const normalized = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  if (/결제\s*오류|결제오류|결제 실패|결제실패/.test(value)) return "PAYMENT_ERROR";
-  if (/취소|환불/.test(value)) return "CANCELLED";
-  if (/구매\s*확정|구매확정|배송\s*완료|배송완료|도착/.test(value)) return "DELIVERED";
-  if (/배송\s*중|배송중|배송\s*시작|배송시작|출고\s*완료|출고완료/.test(value)) return "SHIPPED";
-  if (/출고\s*예정|출고예정|상품\s*준비|상품준비|배송\s*준비|배송준비/.test(value)) return "READY";
-  if (/결제\s*완료|결제완료/.test(value)) return "PAID";
+  // Musinsa detail page often contains action buttons such as:
+  // "주문 취소", "옵션 변경", "취소 요청".
+  // These are NOT order statuses. Only explicit completed cancellation texts
+  // such as "취소 완료" or "주문 취소 완료" should be mapped to CANCELLED.
+  const cleaned = normalized
+    .replace(/주문\s*취소(?!\s*완료)/g, " ")
+    .replace(/취소\s*요청/g, " ")
+    .replace(/옵션\s*변경/g, " ")
+    .replace(/교환\s*요청/g, " ")
+    .replace(/반품\s*요청/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/결제\s*오류|결제\s*실패|결제\s*에러/.test(cleaned)) {
+    return "PAYMENT_ERROR";
+  }
+
+  if (/취소\s*완료|주문\s*취소\s*완료|결제\s*취소\s*완료|환불\s*완료/.test(cleaned)) {
+    return "CANCELLED";
+  }
+
+  if (/배송\s*완료|배송완료|배달\s*완료|배달완료|도착\s*완료|배송이\s*완료|배달이\s*완료|상품이\s*도착했습니다/.test(cleaned)) {
+    return "DELIVERED";
+  }
+
+  if (/배송\s*출발|배송\s*시작|배송\s*중|배송중|출고\s*완료|집화|간선|배달\s*출발/.test(cleaned)) {
+    return "SHIPPED";
+  }
+
+  if (/상품\s*준비\s*중|출고\s*준비|출고\s*예정|배송\s*준비/.test(cleaned)) {
+    return "READY";
+  }
+
+  if (/결제\s*완료|주문\s*완료/.test(cleaned)) {
+    return "PAID";
+  }
 
   return "PENDING";
 }

@@ -152,7 +152,9 @@ function parseDetailItemFromText(containerText: string, fallbackIndex: number): 
       ? possibleBrand
       : undefined;
 
-  const statusSource = `${containerText}\n${shippingMessage || ""}`;
+  const statusLine =
+    pickMusinsaStatusLine(lines) || pickMusinsaStatusLine([containerText]);
+  const statusSource = statusLine || shippingMessage || "";
 
   return {
     brandName,
@@ -165,6 +167,69 @@ function parseDetailItemFromText(containerText: string, fallbackIndex: number): 
   };
 }
 
+function isMusinsaActionButtonLine(line: string): boolean {
+  const normalized = String(line ?? "").replace(/\s+/g, " ").trim();
+
+  return (
+    /^주문\s*취소$/.test(normalized) ||
+    /^취소\s*요청$/.test(normalized) ||
+    /^옵션\s*변경$/.test(normalized) ||
+    /^교환\s*요청$/.test(normalized) ||
+    /^반품\s*요청$/.test(normalized) ||
+    /^스냅\s*보기$/.test(normalized)
+  );
+}
+
+function pickMusinsaStatusLine(lines: string[]): string | undefined {
+  const normalizedLines = lines
+    .map((line) => String(line ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((line) => !isMusinsaActionButtonLine(line));
+
+  const exactPriority = [
+    /^결제\s*오류$/,
+    /^결제\s*실패$/,
+    /^결제\s*에러$/,
+    /^취소\s*완료$/,
+    /^주문\s*취소\s*완료$/,
+    /^결제\s*취소\s*완료$/,
+    /^환불\s*완료$/,
+    /^배송\s*완료$/,
+    /^배달\s*완료$/,
+    /^도착\s*완료$/,
+    /^배송\s*출발$/,
+    /^배송\s*시작$/,
+    /^배송\s*중$/,
+    /^상품\s*준비\s*중$/,
+    /^출고\s*준비$/,
+    /^배송\s*준비$/,
+    /^결제\s*완료$/,
+    /^주문\s*완료$/
+  ];
+
+  for (const pattern of exactPriority) {
+    const matched = normalizedLines.find((line) => pattern.test(line));
+    if (matched) return matched;
+  }
+
+  // Fallback for combined state line such as "결제 완료 05.12(화) 이내 출고 예정".
+  // Keep this strict and never treat "주문 취소" alone as cancelled.
+  const combinedPriority: Array<{ pattern: RegExp; value: string }> = [
+    { pattern: /결제\s*오류|결제\s*실패|결제\s*에러/, value: "결제 오류" },
+    { pattern: /취소\s*완료|주문\s*취소\s*완료|결제\s*취소\s*완료|환불\s*완료/, value: "취소 완료" },
+    { pattern: /배송\s*완료|배달\s*완료|도착\s*완료/, value: "배송 완료" },
+    { pattern: /배송\s*출발|배송\s*시작|배송\s*중/, value: "배송 중" },
+    { pattern: /상품\s*준비\s*중|출고\s*준비|배송\s*준비/, value: "상품 준비 중" },
+    { pattern: /결제\s*완료|주문\s*완료/, value: "결제 완료" }
+  ];
+
+  for (const { pattern, value } of combinedPriority) {
+    const matched = normalizedLines.find((line) => pattern.test(line));
+    if (matched) return value;
+  }
+
+  return undefined;
+}
 function parseQuantityAndOption(line?: string): {
   optionName?: string;
   quantity: number;
@@ -237,7 +302,7 @@ function parseDetailItemsFromBodyText(
 
   const globalStatusLine =
     lines.find((line) =>
-      /결제\s*완료|상품\s*준비\s*중|출고\s*예정|배송\s*시작|배송\s*중|배송\s*완료|구매\s*확정|결제오류|결제\s*오류|취소/.test(
+      /결제\s*완료|상품\s*준비\s*중|출고\s*준비|배송\s*준비|배송\s*시작|배송\s*중|배송\s*완료|구매\s*확정|결제오류|결제\s*오류|취소\s*완료|주문\s*취소\s*완료|결제\s*취소\s*완료|환불\s*완료/.test(
         line
       )
     ) || undefined;
@@ -282,9 +347,11 @@ function parseDetailItemsFromBodyText(
 
     const quantityAndOption = parseQuantityAndOption(optionLine);
     const amount = parseMoney(amountLine);
-    const statusSource = `${globalStatusLine || ""}\n${globalShippingMessage || ""}\n${lines
-      .slice(Math.max(0, i - 6), i + 2)
-      .join("\n")}`;
+    const localLines = lines.slice(Math.max(0, i - 6), i + 2);
+    const localStatusLine =
+      pickMusinsaStatusLine(localLines) ||
+      pickMusinsaStatusLine([globalStatusLine || ""]);
+    const statusSource = localStatusLine || globalShippingMessage || "";
 
     items.push({
       brandName,
@@ -726,9 +793,10 @@ async function extractOrdersFromDetailPage(
         ? finalTrackingUrl
         : buildInvoiceUrl(sourceOrderNumber, ordOptNo) || trackingTarget.href;
 
+    const trackingFallbackStatus = trackingText ? mapMusinsaStatus(trackingText) : "PENDING";
     const shippingStatus =
       tracking.trackingStatus ||
-      mapMusinsaStatus(`${item.shippingStatus}\n${item.shippingMessage || ""}\n${trackingText}`);
+      (trackingFallbackStatus !== "PENDING" ? trackingFallbackStatus : item.shippingStatus);
 
     orders.push({
       orderNumber: makeMusinsaOrderNumber(sourceOrderNumber, lineIndex),
