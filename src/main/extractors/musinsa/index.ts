@@ -78,6 +78,69 @@ function unique<T>(items: T[], getKey: (item: T) => string): T[] {
   return result;
 }
 
+function normalizeExtractionDateInput(value?: string): string | undefined {
+  if (!value) return undefined;
+
+  const trimmed = String(value).trim();
+  const match = trimmed.match(/^(\d{4})[-./]?(\d{2})[-./]?(\d{2})/);
+
+  if (!match) return undefined;
+
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function orderDateKeyFromSourceOrderNumber(sourceOrderNumber: string): string | undefined {
+  const match = String(sourceOrderNumber ?? "").match(/^(\d{4})(\d{2})(\d{2})/);
+
+  if (!match) return undefined;
+
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function isSourceOrderNumberInDateRange(
+  sourceOrderNumber: string,
+  since?: string,
+  until?: string
+): boolean {
+  const orderDate = orderDateKeyFromSourceOrderNumber(sourceOrderNumber);
+  const sinceDate = normalizeExtractionDateInput(since);
+  const untilDate = normalizeExtractionDateInput(until);
+
+  if (!orderDate) return true;
+  if (sinceDate && orderDate < sinceDate) return false;
+  if (untilDate && orderDate > untilDate) return false;
+
+  return true;
+}
+
+function getSourceOrderNumberFromDetailLink(link: DetailLink): string | undefined {
+  return (
+    extractSourceOrderNumberFromUrl(link.url) ||
+    String(link.text ?? "").match(/\b20\d{12,}\b/)?.[0]
+  );
+}
+
+function filterDetailLinksByDateRange(
+  links: DetailLink[],
+  since?: string,
+  until?: string
+): {
+  links: DetailLink[];
+  skipped: number;
+} {
+  const filtered = links.filter((link) => {
+    const sourceOrderNumber = getSourceOrderNumberFromDetailLink(link);
+
+    if (!sourceOrderNumber) return true;
+
+    return isSourceOrderNumberInDateRange(sourceOrderNumber, since, until);
+  });
+
+  return {
+    links: filtered,
+    skipped: links.length - filtered.length
+  };
+}
 function parseDetailItemFromText(containerText: string, fallbackIndex: number): ParsedDetailItem {
   const lines = normalizeLines(containerText);
 
@@ -885,10 +948,24 @@ class MusinsaExtractor extends BaseExtractor {
     await page.waitForTimeout(3000);
 
     const detailLinks = await collectDetailLinks(page);
+    const since = normalizeExtractionDateInput(options.since);
+    const until = normalizeExtractionDateInput(options.until);
+    const dateFiltered = filterDetailLinksByDateRange(detailLinks, since, until);
+
+    if (since || until) {
+      progress?.({
+        runId: "",
+        siteId: 0,
+        siteCode: this.config.code,
+        phase: "extracting",
+        message: `무신사 주문 날짜 필터 적용: ${since || "전체"} ~ ${until || "전체"} / 수집 ${detailLinks.length}건 중 ${dateFiltered.links.length}건 대상, ${dateFiltered.skipped}건 제외`
+      });
+    }
+
     const requestedMaxDetails =
       options.maxPages && options.maxPages > 0 ? options.maxPages : 10;
-    const maxDetails = Math.min(detailLinks.length, requestedMaxDetails);
-    const targetLinks = detailLinks.slice(0, maxDetails);
+    const maxDetails = Math.min(dateFiltered.links.length, requestedMaxDetails);
+    const targetLinks = dateFiltered.links.slice(0, maxDetails);
     const includeNoTracking = options.includeNoTracking ?? true;
 
     if (targetLinks.length === 0) {
