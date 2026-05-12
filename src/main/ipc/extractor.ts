@@ -141,6 +141,40 @@ function finishLog(input: {
   );
 }
 
+function cleanupStaleRunningLogs(): number {
+  try {
+    const db = getDb();
+
+    const result = db
+      .prepare(
+        `
+        UPDATE extraction_logs
+        SET
+          status = 'failed',
+          finished_at = datetime('now'),
+          message = 'Extraction interrupted before completion'
+        WHERE status = 'running'
+          AND finished_at IS NULL
+          AND started_at < datetime('now', '-30 minutes')
+        `
+      )
+      .run();
+
+    const changes = Number(result.changes ?? 0);
+
+    if (changes > 0) {
+      console.warn(
+        `[extractor] Cleaned up ${changes} stale running extraction log(s)`
+      );
+    }
+
+    return changes;
+  } catch (error) {
+    console.warn("[extractor] Failed to clean up stale running logs", error);
+    return 0;
+  }
+}
+
 function upsertOrders(siteId: number, orders: StandardOrder[]) {
   const db = getDb();
 
@@ -285,7 +319,13 @@ async function runExtraction(input: {
     }
 
     const headless = effectiveOptions.headless ?? false;
-    report("browser", headless ? "Launching browser with persistent profile" : "Launching browser");
+    report(
+      "browser",
+      headless
+        ? "Launching browser with persistent profile"
+        : "Launching browser"
+    );
+
     const context = await extractor.launchPersistentContext(effectiveOptions);
 
     report("session", "Using persistent browser profile");
@@ -364,7 +404,8 @@ async function runExtraction(input: {
     finishLog({
       logId,
       status: isCancelled ? "cancelled" : "failed",
-      message: error instanceof Error ? error.message : "Unknown extraction error",
+      message:
+        error instanceof Error ? error.message : "Unknown extraction error",
       errorStack: error instanceof Error ? error.stack : undefined
     });
 
@@ -388,6 +429,8 @@ async function runExtraction(input: {
 }
 
 export function registerExtractorIpc() {
+  cleanupStaleRunningLogs();
+
   loadExtractors();
 
   ipcMain.handle("extractor:available", async () => {
