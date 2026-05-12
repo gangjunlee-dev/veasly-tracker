@@ -35,11 +35,15 @@ const CancelExtractorSchema = z.object({
 });
 
 type RunningJob = {
+  siteId: number;
   abortController: AbortController;
   extractor: BaseExtractor;
 };
 
+
 const runningJobs = new Map<string, RunningJob>();
+const runningSiteJobs = new Map<number, string>();
+
 
 function nowIso() {
   return new Date().toISOString();
@@ -283,9 +287,11 @@ async function runExtraction(input: {
   let extractionSucceeded = false;
 
   runningJobs.set(input.runId, {
-    abortController: input.abortController,
-    extractor
-  });
+  siteId: site.id,
+  abortController: input.abortController,
+  extractor
+});
+
 
   const credentials = {
     username: site.username,
@@ -438,23 +444,43 @@ export function registerExtractorIpc() {
   });
 
   ipcMain.handle("extractor:run", async (event, rawInput) => {
-    const input = RunExtractorSchema.parse(rawInput);
-    const runId = crypto.randomUUID();
-    const abortController = new AbortController();
+  const input = RunExtractorSchema.parse(rawInput);
+
+  const existingRunId = runningSiteJobs.get(input.siteId);
+
+  if (existingRunId) {
+    return {
+      runId: existingRunId,
+      alreadyRunning: true
+    };
+  }
+
+  const runId = crypto.randomUUID();
+  const abortController = new AbortController();
+
+  runningSiteJobs.set(input.siteId, runId);
+
 
     const sendProgress: ProgressReporter = (progress) => {
       event.sender.send("extractor:progress", normalizeProgress(progress));
     };
 
     void runExtraction({
-      runId,
-      siteId: input.siteId,
-      options: input.options ?? {},
-      sendProgress,
-      abortController
-    }).catch((error) => {
-      console.error("[extractor] run failed", error);
-    });
+  runId,
+  siteId: input.siteId,
+  options: input.options ?? {},
+  sendProgress,
+  abortController
+})
+  .catch((error) => {
+    console.error("[extractor] run failed", error);
+  })
+  .finally(() => {
+    if (runningSiteJobs.get(input.siteId) === runId) {
+      runningSiteJobs.delete(input.siteId);
+    }
+  });
+
 
     return {
       runId
@@ -473,10 +499,15 @@ export function registerExtractorIpc() {
     }
 
     job.abortController.abort();
-    await job.extractor.close();
+await job.extractor.close();
 
-    return {
-      success: true
-    };
+if (runningSiteJobs.get(job.siteId) === input.runId) {
+  runningSiteJobs.delete(job.siteId);
+}
+
+return {
+  success: true
+};
+
   });
 }
