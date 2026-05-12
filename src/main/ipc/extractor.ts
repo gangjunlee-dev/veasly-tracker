@@ -239,10 +239,14 @@ async function runExtraction(input: {
 
   // Musinsa does not reliably support pure headless/background login checks.
   // Treat background mode as a persistent headed-browser automation mode.
+  const requestedBackground = input.options.headless === true;
+
   const effectiveOptions = {
     ...input.options,
     headless: false
   };
+
+  let extractionSucceeded = false;
 
   runningJobs.set(input.runId, {
     abortController: input.abortController,
@@ -286,7 +290,11 @@ async function runExtraction(input: {
 
     report("session", "Using persistent browser profile");
 
-    const page = await context.newPage();
+    const existingPages = context.pages();
+    const page =
+      requestedBackground && existingPages.length > 0
+        ? existingPages[0]
+        : await context.newPage();
 
     report("login", "Checking login status");
     const loggedIn = await extractor.isLoggedIn(page).catch(() => false);
@@ -346,6 +354,8 @@ async function runExtraction(input: {
     report("success", "Extraction completed", {
       ordersFound: result.totalOrders
     });
+
+    extractionSucceeded = true;
   } catch (error) {
     const isCancelled =
       input.abortController.signal.aborted ||
@@ -368,7 +378,12 @@ async function runExtraction(input: {
     }
   } finally {
     runningJobs.delete(input.runId);
-    await extractor.close();
+
+    if (requestedBackground && extractionSucceeded) {
+      report("browser", "Keeping persistent browser open for session reuse");
+    } else {
+      await extractor.close();
+    }
   }
 }
 

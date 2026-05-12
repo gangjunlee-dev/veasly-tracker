@@ -437,10 +437,10 @@ async function getBodyText(page: Page): Promise<string> {
   }
 }
 
-async function waitForManualLogin(page: Page, progress?: ProgressReporter): Promise<void> {
-  const maxWaitMs = 5 * 60 * 1000;
-  const startedAt = Date.now();
-
+async function waitForManualLogin(
+  page: Page,
+  progress?: ProgressReporter
+): Promise<void> {
   progress?.({
     runId: "",
     siteId: 0,
@@ -449,14 +449,27 @@ async function waitForManualLogin(page: Page, progress?: ProgressReporter): Prom
     message: "무신사 주문내역 페이지로 이동합니다. 로그인 화면이 보이면 브라우저에서 수동 로그인해 주세요."
   });
 
-  await page.goto(MUSINSA_URLS.orderList, {
-    waitUntil: "domcontentloaded",
-    timeout: 60000
-  });
+  await page
+    .goto(MUSINSA_URLS.orderList, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000
+    })
+    .catch(() => undefined);
+
+  await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+
+  const maxWaitMs = 5 * 60 * 1000;
+  const startedAt = Date.now();
+  let lastOrderListNudgeAt = 0;
 
   while (Date.now() - startedAt < maxWaitMs) {
     const url = page.url();
-    const passwordInputs = await page.locator("input[type='password']").count().catch(() => 0);
+
+    const passwordInputs = await page
+      .locator("input[type='password']")
+      .count()
+      .catch(() => 0);
+
     const detailLinkCount = await page
       .locator(MUSINSA_SELECTORS.orderDetailLinks.join(","))
       .count()
@@ -464,12 +477,19 @@ async function waitForManualLogin(page: Page, progress?: ProgressReporter): Prom
 
     const bodyText = await getBodyText(page);
 
-    const looksLikeOrderList =
-      url.includes("/order/order-list") &&
-      passwordInputs === 0 &&
-      (detailLinkCount > 0 || /주문\s*상세|배송\s*조회|배송조회|주문번호/.test(bodyText));
+    const looksLikeLogin =
+      passwordInputs > 0 ||
+      /login|signin|member\/login/i.test(url) ||
+      (/로그인/.test(bodyText) && /아이디|비밀번호/.test(bodyText));
 
-    if (looksLikeOrderList) {
+    const looksLikeOrderAccess =
+      passwordInputs === 0 &&
+      (
+        detailLinkCount > 0 ||
+        /주문\s*내역|주문\s*상세|배송\s*조회|배송조회|주문번호|주문\s*상품|구매\s*내역|주문한\s*상품이\s*없습니다|주문\s*내역이\s*없습니다/.test(bodyText)
+      );
+
+    if (looksLikeOrderAccess) {
       progress?.({
         runId: "",
         siteId: 0,
@@ -477,7 +497,31 @@ async function waitForManualLogin(page: Page, progress?: ProgressReporter): Prom
         phase: "login",
         message: "무신사 로그인/주문내역 접근 확인 완료"
       });
+
+      await page
+        .goto(MUSINSA_URLS.orderList, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000
+        })
+        .catch(() => undefined);
+
+      await page.waitForLoadState("domcontentloaded").catch(() => undefined);
       return;
+    }
+
+    // 로그인 후 메인/마이페이지 등에 머무는 경우 주문내역으로 다시 유도한다.
+    if (
+      passwordInputs === 0 &&
+      !looksLikeLogin &&
+      Date.now() - lastOrderListNudgeAt > 15000
+    ) {
+      lastOrderListNudgeAt = Date.now();
+      await page
+        .goto(MUSINSA_URLS.orderList, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000
+        })
+        .catch(() => undefined);
     }
 
     progress?.({

@@ -2,6 +2,8 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+
+type StoredSessionState = Awaited<ReturnType<BrowserContext["storageState"]>>;
 import { decrypt, encrypt, type EncryptedPayload } from "../../crypto/vault";
 import type {
   Credentials,
@@ -11,11 +13,11 @@ import type {
   StandardOrder
 } from "./types";
 
-type StorageState = Awaited<ReturnType<BrowserContext["storageState"]>>;
 
 export abstract class BaseExtractor {
   protected browser: Browser | null = null;
   protected persistentContext: BrowserContext | null = null;
+  private static sharedPersistentContexts = new Map<string, BrowserContext>();
 
   constructor(public readonly config: ExtractorConfig) {}
 
@@ -81,6 +83,18 @@ export abstract class BaseExtractor {
       return this.persistentContext;
     }
 
+    const sharedContext = BaseExtractor.sharedPersistentContexts.get(this.config.code);
+    if (sharedContext) {
+      try {
+        await sharedContext.cookies();
+        this.persistentContext = sharedContext;
+        console.log("[extractor] Reusing shared persistent context:", this.config.code);
+        return sharedContext;
+      } catch {
+        BaseExtractor.sharedPersistentContexts.delete(this.config.code);
+      }
+    }
+
     const runInBackground = options.headless ?? false;
 
     const persistentProfileDir = this.getPersistentProfileDir();
@@ -114,9 +128,11 @@ export abstract class BaseExtractor {
       }
     );
 
+    BaseExtractor.sharedPersistentContexts.set(this.config.code, this.persistentContext);
+
     return this.persistentContext;
   }
-  protected async readStoredSessionState(): Promise<StorageState | undefined> {
+  protected async readStoredSessionState(): Promise<StoredSessionState | undefined> {
     const sessionPath = this.getSessionFilePath();
 
     if (!fs.existsSync(sessionPath)) {
@@ -269,12 +285,13 @@ export abstract class BaseExtractor {
 
   public async close(): Promise<void> {
     if (this.persistentContext) {
-      await this.persistentContext.close();
+      BaseExtractor.sharedPersistentContexts.delete(this.config.code);
+      await this.persistentContext.close().catch(() => undefined);
       this.persistentContext = null;
     }
 
     if (this.browser) {
-      await this.browser.close();
+      await this.browser.close().catch(() => undefined);
       this.browser = null;
     }
   }
