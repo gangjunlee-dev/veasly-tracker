@@ -11,6 +11,7 @@ import {
   type OrderFilterState
 } from "../../../components/OrderFilters";
 import { OrderTable, type OrderRow } from "../../../components/OrderTable";
+import { OliveYoungManualImportPanel } from "../../../components/OliveYoungManualImportPanel";
 import {
   ExtractionProgressPanel,
   type ProgressItem
@@ -524,6 +525,14 @@ export default function SiteDetailPage() {
               </label>
             </div>
           </section>
+
+          {site.code === "oliveyoung" ? (
+            <OliveYoungManualImportPanel
+              siteId={site.id}
+              onImported={handleRefreshOrders}
+            />
+          ) : null}
+
           <OrderFilters
             value={filters}
             onChange={setFilters}

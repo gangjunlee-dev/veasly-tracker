@@ -92,6 +92,14 @@ export type OliveYoungSnapshotItem = {
   invoiceNumber?: string | null;
   invoiceUrl?: string | null;
   shippingStatus?: string | null;
+  carrier?: string | null;
+  carrierCode?: string | null;
+  trackingNumber?: string | null;
+  expectedDeliveryDate?: string | null;
+  tradeShipCode?: string | null;
+  orderGoodsSeq?: string | null;
+  goodsNo?: string | null;
+  goodsName?: string | null;
   rawText?: string;
   sourceRowIndex?: number;
 };
