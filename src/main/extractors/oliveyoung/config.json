@@ -1,0 +1,9 @@
+{
+  "code": "oliveyoung",
+  "name": "Olive Young Buyer Orders",
+  "description": "Extract Olive Young buyer order items from order/delivery history",
+  "loginUrl": "https://www.oliveyoung.co.kr/store/login/loginForm.do",
+  "ordersUrl": "https://www.oliveyoung.co.kr/store/mypage/getOrderList.do",
+  "version": "0.1.0",
+  "enabled": true
+}
