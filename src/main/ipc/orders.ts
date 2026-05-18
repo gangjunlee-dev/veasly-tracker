@@ -1,5 +1,6 @@
 import { ipcMain } from "electron";
 import { z } from "zod";
+import crypto from "node:crypto";
 import { getDb } from "../db/client";
 
 const PaginationSchema = z.object({
@@ -26,6 +27,35 @@ const ExportSchema = DateFilterSchema.extend({
   siteIds: z.array(z.number().int().positive()).optional(),
   siteId: z.number().int().positive().optional(),
   search: z.string().optional()
+});
+
+
+const OliveYoungSnapshotItemSchema = z.object({
+  orderNumber: z.string().min(1),
+  orderDate: z.string().min(1),
+  productName: z.string().min(1),
+  quantity: z.number().int().positive().default(1),
+  amount: z.number().int().nonnegative().default(0),
+  currency: z.string().optional().default("KRW"),
+  invoiceNumber: z.string().nullable().optional(),
+  invoiceUrl: z.string().nullable().optional(),
+  shippingStatus: z.string().nullable().optional(),
+  rawText: z.string().optional(),
+  sourceRowIndex: z.number().optional()
+});
+
+const OliveYoungSnapshotSchema = z.object({
+  url: z.string().optional(),
+  title: z.string().optional(),
+  capturedAt: z.string().optional(),
+  totalItems: z.number().optional(),
+  orderNumbers: z.array(z.string()).optional(),
+  items: z.array(OliveYoungSnapshotItemSchema)
+});
+
+const ImportOliveYoungSnapshotSchema = z.object({
+  siteId: z.number().int().positive(),
+  snapshot: OliveYoungSnapshotSchema
 });
 
 function mapOrderRow(row: Record<string, unknown>) {
@@ -139,7 +169,223 @@ function toCsv(rows: ReturnType<typeof mapOrderRow>[]): string {
   return lines.join("\n");
 }
 
+
+function stableShortHash(value: string): string {
+  return crypto.createHash("sha1").update(value).digest("hex").slice(0, 8);
+}
+
+function normalizeOliveYoungDate(value: string): string {
+  const text = String(value || "").trim();
+
+  const isoMatch = text.match(/^(20\d{2})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    return [
+      isoMatch[1],
+      isoMatch[2].padStart(2, "0"),
+      isoMatch[3].padStart(2, "0")
+    ].join("-");
+  }
+
+  const koreanMatch = text.match(/(20\d{2})[.\-/년\s]+(\d{1,2})[.\-/월\s]+(\d{1,2})/);
+  if (koreanMatch) {
+    return [
+      koreanMatch[1],
+      koreanMatch[2].padStart(2, "0"),
+      koreanMatch[3].padStart(2, "0")
+    ].join("-");
+  }
+
+  return text;
+}
+
+function makeOliveYoungLineOrderNumber(input: {
+  sourceOrderNumber: string;
+  sourceRowIndex?: number;
+  index: number;
+  productName: string;
+  quantity: number;
+  amount: number;
+}): string {
+  const rowPart =
+    typeof input.sourceRowIndex === "number"
+      ? String(input.sourceRowIndex).padStart(3, "0")
+      : String(input.index + 1).padStart(3, "0");
+
+  const hash = stableShortHash(
+    [
+      input.sourceOrderNumber,
+      input.productName,
+      input.quantity,
+      input.amount,
+      rowPart
+    ].join("|")
+  );
+
+  return `${input.sourceOrderNumber}#${rowPart}-${hash}`;
+}
+
+function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoungSnapshotSchema>) {
+  const db = getDb();
+
+  const site = db
+    .prepare("SELECT id, code, enabled FROM sites WHERE id = ?")
+    .get(input.siteId) as { id: number; code: string; enabled: number } | undefined;
+
+  if (!site) {
+    throw new Error(`Site not found: ${input.siteId}`);
+  }
+
+  if (!site.enabled) {
+    throw new Error(`Site is disabled: ${input.siteId}`);
+  }
+
+  if (site.code !== "oliveyoung") {
+    throw new Error(
+      `Site code must be oliveyoung for this import. Received: ${site.code}`
+    );
+  }
+
+  const checkExisting = db.prepare(
+    "SELECT id FROM orders WHERE site_id = ? AND order_number = ?"
+  );
+
+  const upsert = db.prepare(
+    `
+    INSERT INTO orders (
+      site_id,
+      order_number,
+      order_date,
+      product_name,
+      quantity,
+      amount,
+      currency,
+      invoice_number,
+      invoice_url,
+      shipping_status,
+      raw_data
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(site_id, order_number)
+    DO UPDATE SET
+      order_date = excluded.order_date,
+      product_name = excluded.product_name,
+      quantity = excluded.quantity,
+      amount = excluded.amount,
+      currency = excluded.currency,
+      invoice_number = excluded.invoice_number,
+      invoice_url = excluded.invoice_url,
+      shipping_status = excluded.shipping_status,
+      raw_data = excluded.raw_data,
+      updated_at = datetime('now')
+    `
+  );
+
+  const insertLog = db.prepare(
+    `
+    INSERT INTO extraction_logs (
+      site_id,
+      status,
+      started_at,
+      finished_at,
+      message,
+      total_orders,
+      new_orders,
+      updated_orders
+    )
+    VALUES (?, 'success', datetime('now'), datetime('now'), ?, ?, ?, ?)
+    `
+  );
+
+  const touchSite = db.prepare(
+    `
+    UPDATE sites
+    SET last_extracted_at = datetime('now'),
+        updated_at = datetime('now')
+    WHERE id = ?
+    `
+  );
+
+  let newOrders = 0;
+  let updatedOrders = 0;
+
+  const tx = db.transaction(() => {
+    input.snapshot.items.forEach((item, index) => {
+      const sourceOrderNumber = item.orderNumber.trim();
+
+      const orderNumber = makeOliveYoungLineOrderNumber({
+        sourceOrderNumber,
+        sourceRowIndex: item.sourceRowIndex,
+        index,
+        productName: item.productName,
+        quantity: item.quantity,
+        amount: item.amount
+      });
+
+      const rawData = JSON.stringify({
+        source: "oliveyoung_manual_snapshot",
+        sourceOrderNumber,
+        snapshotUrl: input.snapshot.url ?? null,
+        snapshotTitle: input.snapshot.title ?? null,
+        capturedAt: input.snapshot.capturedAt ?? null,
+        item
+      });
+
+      const existing = checkExisting.get(input.siteId, orderNumber);
+
+      upsert.run(
+        input.siteId,
+        orderNumber,
+        normalizeOliveYoungDate(item.orderDate),
+        item.productName.trim(),
+        item.quantity,
+        item.amount,
+        item.currency ?? "KRW",
+        item.invoiceNumber ?? null,
+        item.invoiceUrl ?? null,
+        item.shippingStatus ?? null,
+        rawData
+      );
+
+      if (existing) {
+        updatedOrders += 1;
+      } else {
+        newOrders += 1;
+      }
+    });
+
+    touchSite.run(input.siteId);
+
+    insertLog.run(
+      input.siteId,
+      "OliveYoung manual snapshot import completed",
+      input.snapshot.items.length,
+      newOrders,
+      updatedOrders
+    );
+  });
+
+  tx();
+
+  return {
+    siteId: input.siteId,
+    totalItems: input.snapshot.items.length,
+    newOrders,
+    updatedOrders,
+    savedOrders: input.snapshot.items.length,
+    sourceOrderNumbers: Array.from(
+      new Set(input.snapshot.items.map((item) => item.orderNumber))
+    )
+  };
+}
+
 export function registerOrdersIpc() {
+
+  ipcMain.handle("orders:importOliveYoungSnapshot", async (_event, rawInput) => {
+    const input = ImportOliveYoungSnapshotSchema.parse(rawInput);
+    return importOliveYoungSnapshotToOrders(input);
+  });
+
+
   ipcMain.handle("orders:listBySite", async (_event, rawInput) => {
     const input = ListBySiteSchema.parse(rawInput);
     const db = getDb();

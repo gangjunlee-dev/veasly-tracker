@@ -81,6 +81,44 @@ export type ExportOrdersInput = {
   search?: string;
 };
 
+
+export type OliveYoungSnapshotItem = {
+  orderNumber: string;
+  orderDate: string;
+  productName: string;
+  quantity: number;
+  amount: number;
+  currency?: string;
+  invoiceNumber?: string | null;
+  invoiceUrl?: string | null;
+  shippingStatus?: string | null;
+  rawText?: string;
+  sourceRowIndex?: number;
+};
+
+export type OliveYoungSnapshot = {
+  url?: string;
+  title?: string;
+  capturedAt?: string;
+  totalItems?: number;
+  orderNumbers?: string[];
+  items: OliveYoungSnapshotItem[];
+};
+
+export type ImportOliveYoungSnapshotInput = {
+  siteId: number;
+  snapshot: OliveYoungSnapshot;
+};
+
+export type ImportOliveYoungSnapshotResult = {
+  siteId: number;
+  totalItems: number;
+  newOrders: number;
+  updatedOrders: number;
+  savedOrders: number;
+  sourceOrderNumbers: string[];
+};
+
 export type ExtractorConfig = {
   code: string;
   name: string;
@@ -254,6 +292,9 @@ declare global {
           input: ListAllOrdersInput
         ) => Promise<PaginatedResult<Order>>;
         export: (input: ExportOrdersInput) => Promise<string>;
+        importOliveYoungSnapshot: (
+          input: ImportOliveYoungSnapshotInput
+        ) => Promise<ImportOliveYoungSnapshotResult>;
       };
       warehouse: {
         scanInbound: (

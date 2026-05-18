@@ -3,6 +3,7 @@ import type { IpcRendererEvent } from "electron";
 import type {
   CreateSiteInput,
   ExportOrdersInput,
+  ImportOliveYoungSnapshotInput,
   ExtractionOptions,
   ExtractionProgress,
   ListAllOrdersInput,
@@ -32,7 +33,9 @@ const api = {
     listAll: (input: ListAllOrdersInput) =>
       ipcRenderer.invoke("orders:listAll", input),
     export: (input: ExportOrdersInput) =>
-      ipcRenderer.invoke("orders:export", input)
+      ipcRenderer.invoke("orders:export", input),
+    importOliveYoungSnapshot: (input: ImportOliveYoungSnapshotInput) =>
+      ipcRenderer.invoke("orders:importOliveYoungSnapshot", input)
   },
   warehouse: {
     scanInbound: (input: WarehouseScanInboundInput) =>
