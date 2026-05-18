@@ -1,0 +1,9 @@
+{
+  "code": "29cm",
+  "name": "29CM Buyer Orders",
+  "description": "Extract 29CM buyer order items using Musinsa-style flow",
+  "loginUrl": "https://www.29cm.co.kr/order/my-order/list",
+  "ordersUrl": "https://www.29cm.co.kr/order/my-order/list",
+  "version": "0.1.0",
+  "enabled": true
+}
