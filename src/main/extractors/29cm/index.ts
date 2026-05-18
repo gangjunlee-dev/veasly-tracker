@@ -1081,7 +1081,7 @@ async function extractOrdersFromDetailPage(
         return {
           orderNumber: makeTwentyNineCmOrderNumber(sourceOrderNumber, lineIndex),
           orderDate,
-          productName: cleanTwentyNineCmProductNameFinal(item.productName),
+          productName: cleanTwentyNineCmProductNameFinal(item.productName, (item as { rawText?: string }).rawText),
           quantity: item.quantity,
           amount: normalizeTwentyNineCmAmountFinal(item.amount, (item as { rawText?: string }).rawText, item.productName),
           currency: "KRW",
@@ -1179,7 +1179,7 @@ async function extractOrdersFromDetailPage(
     orders.push({
       orderNumber: makeTwentyNineCmOrderNumber(sourceOrderNumber, lineIndex),
       orderDate,
-      productName: cleanTwentyNineCmProductNameFinal(item.productName),
+      productName: cleanTwentyNineCmProductNameFinal(item.productName, (item as { rawText?: string }).rawText),
       quantity: item.quantity,
       amount: normalizeTwentyNineCmAmountFinal(item.amount, (item as { rawText?: string }).rawText, item.productName),
       currency: "KRW",
@@ -1315,103 +1315,323 @@ function normalizeTwentyNineCmStatusFinal(statusText?: string, rawText?: string)
   return "PENDING";
 }
 
-function cleanTwentyNineCmProductNameFinal(productName: string): string {
-  let value = String(productName || "")
-    .replace(/\s+/g, " ")
-    .trim();
+function cleanTwentyNineCmProductNameFinal(productName?: string | null, rawText?: string | null): string {
+  const raw = String(rawText || "").replace(/\s+/g, " ").trim();
+  let text = String(productName || "").replace(/\s+/g, " ").trim();
 
-  // 상태 + 날짜 문구가 상품명 앞에 붙는 케이스 제거
-  // 예: 배송중5. 20 (수) 도착 예정조스라운지...
-  // 예: 결제완료5. 21 (목) 이내 배송시작아캄...
-  // 예: 상품준비중5. 21 (목) 이내 배송시작오버듀...
-  value = value.replace(
-    /^(배송완료|배송중|배송시작|상품준비중|배송준비중|결제완료|주문완료|구매확정|취소완료|취소)\s*/g,
-    ""
-  );
+  // rawText가 있으면 rawText 기준으로 상품명 복원.
+  // 이유: 기존 productName은 이미 가격/옵션 일부가 잘린 상태일 수 있음.
+  if (raw) {
+    const amountMatch = /[1-9]\d{0,2}(?:,\d{3})+\s*원\s*\/\s*수량\s*\d+\s*개/.exec(raw);
 
-  value = value.replace(
-    /^\d{1,2}[.]\s*\d{1,2}\s*\([^)]+\)\s*(?:도착\s*예정|도착|이내\s*배송시작)?\s*/g,
-    ""
-  );
-
-  // 위 패턴이 붙어 있는 문자열에서 한 번에 안 지워지는 경우 반복 제거
-  for (let i = 0; i < 3; i += 1) {
-    value = value
-      .replace(/^(배송완료|배송중|배송시작|상품준비중|배송준비중|결제완료|주문완료|구매확정|취소완료|취소)\s*/g, "")
-      .replace(/^\d{1,2}[.]\s*\d{1,2}\s*\([^)]+\)\s*(?:도착\s*예정|도착|이내\s*배송시작)?\s*/g, "")
-      .replace(/^(도착\s*예정|도착|이내\s*배송시작)\s*/g, "")
-      .trim();
+    if (amountMatch && typeof amountMatch.index === "number") {
+      text = raw.slice(0, amountMatch.index).trim();
+    } else if (!text) {
+      text = raw;
+    }
   }
 
-  value = value
-    .replace(/반품접수/g, "")
-    .replace(/교환접수/g, "")
-    .replace(/배송조회/g, "")
-    .replace(/무료배송/g, "")
-    .replace(/구매확정\s*\+?[\d,]*\s*원?/g, "")
-    .replace(/리뷰작성\s*\+?(?:최대)?\s*[\d,]*\s*원?/g, "")
+  text = text
     .replace(/\s+/g, " ")
     .trim();
 
-  return value;
+  // 앞쪽 주문일자/주문상세 제거
+  text = text
+    .replace(/^주문일자\s*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}/, "")
+    .replace(/^주문상세/, "")
+    .replace(/^주문일자.*?주문상세/, "")
+    .trim();
+
+  // 앞쪽 상태 제거
+  text = text
+    .replace(/^(결제완료|상품준비중|배송시작|배송중|배송완료|구매확정|취소완료|반품완료|교환완료)/, "")
+    .trim();
+
+  // 앞쪽 도착일/배송예정일 제거
+  // 예: "5. 14 (목) 도착페이즈..." => "페이즈..."
+  // 예: "5. 20 (수) 도착 예정조스라운지..." => "조스라운지..."
+  text = text
+    .replace(/^\d{1,2}\.\s*\d{1,2}\s*\([^)]*\)\s*(도착 예정|도착|이내 배송시작)/, "")
+    .trim();
+
+  // 상태가 다시 한번 붙은 경우 제거
+  text = text
+    .replace(/^(결제완료|상품준비중|배송시작|배송중|배송완료|구매확정|취소완료|반품완료|교환완료)/, "")
+    .replace(/^\d{1,2}\.\s*\d{1,2}\s*\([^)]*\)\s*(도착 예정|도착|이내 배송시작)/, "")
+    .trim();
+
+  // 뒤쪽 불필요 액션/배송 정보 제거
+  text = text
+    .replace(/배송완료.*$/, "")
+    .replace(/배송중.*$/, "")
+    .replace(/배송시작.*$/, "")
+    .replace(/상품준비중.*$/, "")
+    .replace(/결제완료.*$/, "")
+    .replace(/구매확정.*$/, "")
+    .replace(/취소완료.*$/, "")
+    .replace(/반품접수.*$/, "")
+    .replace(/교환접수.*$/, "")
+    .replace(/배송조회.*$/, "")
+    .replace(/리뷰작성.*$/, "")
+    .replace(/배송비\s*:\s*[\d,]+원.*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text;
 }
 
-function normalizeTwentyNineCmAmountFinal(amount: number, rawText?: string, productName?: string): number {
-  const current = Number(amount || 0);
+function parseTwentyNineCmStrictAmountQuantity(text?: string | null): { amount: number; quantity: number } | null {
+  const source = String(text || "");
 
-  // 정상 범위면 그대로 사용
-  if (current > 0 && current < 3000000) {
-    return current;
+  if (!source.trim()) {
+    return null;
   }
 
-  const sources = [productName, rawText].map((x) => String(x || ""));
-  const candidates: number[] = [];
+  const candidates: Array<{
+    amount: number;
+    quantity: number;
+    index: number;
+    raw: string;
+  }> = [];
 
-  for (const source of sources) {
-    // 가장 신뢰도 높은 패턴: "158,400원 / 수량 1개"
-    const strictMatches = Array.from(
-      source.matchAll(/([\d,]{2,})\s*원\s*\/\s*수량\s*\d+\s*개/g)
-    );
+  // 29CM 상품금액은 "72,200원 / 수량 1개" 패턴만 상품 금액으로 인정한다.
+  // "[Size]23072,200원 / 수량 1개"처럼 옵션 숫자와 붙어도
+  // 정규식은 "72,200원 / 수량 1개"부터 정상 매칭한다.
+  const pattern = /([1-9]\d{0,2}(?:,\d{3})+)\s*원\s*\/\s*수량\s*(\d+)\s*개/g;
 
-    for (const match of strictMatches) {
-      const parsed = Number(String(match[1] || "").replace(/,/g, ""));
-      if (parsed > 0 && parsed < 3000000) {
-        candidates.push(parsed);
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(source)) !== null) {
+    const amount = Number.parseInt(String(match[1] || "").replace(/,/g, ""), 10);
+    const quantity = Number.parseInt(String(match[2] || "1"), 10) || 1;
+
+    if (!Number.isFinite(amount)) continue;
+    if (amount <= 0) continue;
+    if (amount >= 3_000_000) continue;
+
+    candidates.push({
+      amount,
+      quantity,
+      index: Number(match.index),
+      raw: match[0]
+    });
+  }
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  candidates.sort((a, b) => a.index - b.index);
+
+  return {
+    amount: candidates[0].amount,
+    quantity: candidates[0].quantity
+  };
+}
+
+function normalizeTwentyNineCmAmountFinal(
+  currentAmount?: number | null,
+  rawText?: string | null,
+  productName?: string | null
+): number {
+  const fromRaw = parseTwentyNineCmStrictAmountQuantity(rawText);
+  if (fromRaw) {
+    return fromRaw.amount;
+  }
+
+  const fromProduct = parseTwentyNineCmStrictAmountQuantity(productName);
+  if (fromProduct) {
+    return fromProduct.amount;
+  }
+
+  // rawText가 있는데 상품금액 패턴을 못 찾으면 기존 currentAmount는 신뢰하지 않는다.
+  // currentAmount에 구매확정 포인트/리뷰 포인트가 들어올 수 있기 때문.
+  if (rawText && String(rawText).trim()) {
+    return 0;
+  }
+
+  if (
+    typeof currentAmount === "number" &&
+    Number.isFinite(currentAmount) &&
+    currentAmount > 0 &&
+    currentAmount < 3_000_000
+  ) {
+    return currentAmount;
+  }
+
+  return 0;
+}
+
+
+
+function normalizeTwentyNineCmSplitAmount(rawAmountText: string, beforeText?: string | null): number {
+  const raw = String(rawAmountText || "");
+  const before = String(beforeText || "");
+
+  let amount = Number.parseInt(raw.replace(/,/g, ""), 10);
+
+  const commaIndex = raw.indexOf(",");
+  const prefixLength = commaIndex >= 0 ? commaIndex : 0;
+  const hasOptionMarkerBefore = /\[(?:Size|SIZE|사이즈|옵션|Color|COLOR|컬러|기종|선택|패키지)[^\]]*\]?$|(?:Size|SIZE|사이즈|옵션|Color|COLOR|컬러|기종|선택|패키지)\]?$/.test(before.slice(-30));
+
+  // 29CM DOM에서 옵션 숫자와 금액이 붙는 케이스 보정.
+  // 예:
+  // [사이즈]1143,100원 => 실제 143,100원
+  // [사이즈]262,100원  => 실제 62,100원
+  // [Size]23072,200원 => 실제 72,200원
+  if (hasOptionMarkerBefore && prefixLength >= 3) {
+    for (let cut = 1; cut <= Math.min(3, prefixLength - 1); cut += 1) {
+      const candidateRaw = raw.slice(cut);
+
+      if (!/^[1-9]\d{0,2}(?:,\d{3})+$/.test(candidateRaw)) {
+        continue;
+      }
+
+      const candidate = Number.parseInt(candidateRaw.replace(/,/g, ""), 10);
+
+      if (Number.isFinite(candidate) && candidate > 0 && candidate < 3_000_000) {
+        return candidate;
       }
     }
-
-    // 일반 금액 후보
-    const looseMatches = Array.from(source.matchAll(/([\d,]{2,})\s*원/g));
-
-    for (const match of looseMatches) {
-      const parsed = Number(String(match[1] || "").replace(/,/g, ""));
-      if (parsed > 0 && parsed < 3000000) {
-        candidates.push(parsed);
-      }
-    }
   }
 
-  if (candidates.length > 0) {
-    // 너무 작은 리뷰 적립금/포인트보다 상품금액일 가능성이 높은 값을 우선
-    const meaningful = candidates.filter((x) => x >= 5000);
-    return meaningful[0] || candidates[0];
+  if (Number.isFinite(amount) && amount > 0 && amount < 3_000_000) {
+    return amount;
   }
 
-  // 29CM DOM에서 숫자가 붙어 "23,072" + "200" => 23,072,200처럼 되는 방어.
-  // 1천으로 나눴을 때 5천~300만원 범위면 보정한다.
-  if (current >= 3000000) {
-    const dividedBy1000 = Math.round(current / 1000);
-    if (dividedBy1000 >= 5000 && dividedBy1000 < 3000000) {
-      return dividedBy1000;
-    }
+  return 0;
+}
 
-    const dividedBy100 = Math.round(current / 100);
-    if (dividedBy100 >= 5000 && dividedBy100 < 3000000) {
-      return dividedBy100;
-    }
+function findTwentyNineCmProductAmountMatchesForSplit(rawText?: string | null): Array<{
+  raw: string;
+  rawAmount: string;
+  amount: number;
+  quantity: number;
+  index: number;
+}> {
+  const text = String(rawText || "");
+  const result: Array<{
+    raw: string;
+    rawAmount: string;
+    amount: number;
+    quantity: number;
+    index: number;
+  }> = [];
+
+  // 정상: 72,200원 / 수량 1개
+  // 옵션 결합: [사이즈]262,100원 / 수량 1개
+  const pattern = /([1-9]\d{0,4}(?:,\d{3})+)\s*원\s*\/\s*수량\s*(\d+)\s*개/g;
+
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const rawAmount = String(match[1] || "");
+    const before = text.slice(Math.max(0, Number(match.index) - 50), Number(match.index));
+    const amount = normalizeTwentyNineCmSplitAmount(rawAmount, before);
+    const quantity = Number.parseInt(String(match[2] || "1"), 10) || 1;
+
+    if (!amount) continue;
+
+    result.push({
+      raw: match[0],
+      rawAmount,
+      amount,
+      quantity,
+      index: Number(match.index)
+    });
   }
 
-  return current;
+  return result;
+}
+
+function extractTwentyNineCmSplitStatus(segment?: string | null, fallback?: string | null): string {
+  const text = String(segment || "");
+  const match = /(취소완료|반품완료|교환완료|구매확정|배송완료|배송중|배송시작|상품준비중|결제완료|주문완료)/.exec(text);
+  return match?.[1] || String(fallback || "");
+}
+
+function extractTwentyNineCmSplitExpectedDelivery(segment?: string | null, fallback?: string | null): string | undefined {
+  const text = String(segment || "");
+  const match = /\d{1,2}\.\s*\d{1,2}\s*\([^)]*\)\s*(?:도착 예정|도착|이내 배송시작)/.exec(text);
+  return match?.[0]?.trim() || fallback || undefined;
+}
+
+function extractTwentyNineCmSplitTracking(segment?: string | null): { carrier?: string; trackingNumber?: string } {
+  const text = String(segment || "").replace(/\s+/g, " ").trim();
+  const match = /(CJ대한통운|우체국택배|롯데택배|로젠택배|한진택배|딜리박스|경동택배|대신택배)\s+(\d{8,20})/.exec(text);
+
+  if (!match) {
+    return {};
+  }
+
+  return {
+    carrier: match[1],
+    trackingNumber: match[2]
+  };
+}
+
+function splitTwentyNineCmRawItemIntoProductsFinal<T extends {
+  rawText?: string | null;
+  productName?: string | null;
+  amount?: number | null;
+  quantity?: number | null;
+  shippingStatusText?: string | null;
+  carrier?: string | null;
+  trackingNumber?: string | null;
+  expectedDeliveryText?: string | null;
+  sourceOrderNumber?: string | null;
+}>(item: T): T[] {
+  const rawText = String(item.rawText || "");
+  const matches = findTwentyNineCmProductAmountMatchesForSplit(rawText);
+
+  if (matches.length <= 1) {
+    return [item];
+  }
+
+  return matches.map((match, index) => {
+    const prevEnd =
+      index === 0
+        ? 0
+        : matches[index - 1].index + matches[index - 1].raw.length;
+
+    const nextStart =
+      index + 1 < matches.length
+        ? matches[index + 1].index
+        : rawText.length;
+
+    const segmentBeforeAmount = rawText.slice(prevEnd, match.index);
+    const segment = rawText.slice(prevEnd, nextStart);
+
+    const tracking = extractTwentyNineCmSplitTracking(segment);
+    const productName = cleanTwentyNineCmProductNameFinal(segmentBeforeAmount, segment);
+    const shippingStatusText = extractTwentyNineCmSplitStatus(segment, item.shippingStatusText);
+    const expectedDeliveryText = extractTwentyNineCmSplitExpectedDelivery(segment, item.expectedDeliveryText);
+
+    return {
+      ...item,
+      productName,
+      amount: match.amount,
+      quantity: match.quantity,
+      shippingStatusText,
+      carrier: tracking.carrier || item.carrier,
+      trackingNumber: tracking.trackingNumber || item.trackingNumber,
+      expectedDeliveryText,
+      rawText: segment,
+      productText: segmentBeforeAmount,
+      splitProductIndex: index + 1,
+      splitProductCount: matches.length
+    } as T;
+  });
+}
+
+function expandTwentyNineCmItemsForProducts<T extends object>(items: T[]): T[] {
+  const expanded: T[] = [];
+
+  for (const item of items) {
+    expanded.push(...splitTwentyNineCmRawItemIntoProductsFinal(item as any));
+  }
+
+  return expanded;
 }
 
 async function extractTwentyNineCmOrdersFromListPage(
@@ -1584,9 +1804,21 @@ async function extractTwentyNineCmOrdersFromListPage(
     options.maxPages && options.maxPages > 0 ? options.maxPages : dateFiltered.length;
 
   const targetItems = dateFiltered.slice(0, requestedMaxItems);
+  const expandedTargetItems = expandTwentyNineCmItemsForProducts(targetItems);
+
+  progress?.({
+    runId: "",
+    siteId: 0,
+    siteCode: config.code,
+    phase: "extracting",
+    message: `29CM 상품 split: 원본 ${targetItems.length}건 → 상품 ${expandedTargetItems.length}건`,
+    current: expandedTargetItems.length,
+    total: expandedTargetItems.length
+  });
+
   const lineCounters = new Map<string, number>();
 
-  const orders = targetItems.map((item) => {
+  const orders = expandedTargetItems.map((item) => {
     const nextLineIndex = (lineCounters.get(item.sourceOrderNumber) || 0) + 1;
     lineCounters.set(item.sourceOrderNumber, nextLineIndex);
 
@@ -1602,7 +1834,7 @@ async function extractTwentyNineCmOrdersFromListPage(
     return {
       orderNumber: makeTwentyNineCmOrderNumber(item.sourceOrderNumber, nextLineIndex),
       orderDate: item.orderDate,
-      productName: cleanTwentyNineCmProductNameFinal(item.productName),
+      productName: cleanTwentyNineCmProductNameFinal(item.productName, (item as { rawText?: string }).rawText),
       quantity: item.quantity,
       amount: normalizeTwentyNineCmAmountFinal(item.amount, (item as { rawText?: string }).rawText, item.productName),
       currency: "KRW",
