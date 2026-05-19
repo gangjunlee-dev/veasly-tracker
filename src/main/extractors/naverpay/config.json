@@ -1,0 +1,9 @@
+{
+  "code": "naverpay",
+  "name": "Naver Pay Buyer Orders",
+  "baseUrl": "https://pay.naver.com",
+  "loginUrl": "https://nid.naver.com/nidlogin.login?url=https%3A%2F%2Fpay.naver.com%2Fpc%2Fhistory%3Fpage%3D1",
+  "ordersUrl": "https://pay.naver.com/pc/history?page=1",
+  "enabled": true,
+  "selectors": {}
+}
