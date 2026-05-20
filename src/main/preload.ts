@@ -19,7 +19,9 @@ import type {
 const api = {
   app: {
     ping: () => ipcRenderer.invoke("app:ping") as Promise<string>,
-    getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>
+    getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
+    copyToClipboard: (text: string) =>
+      ipcRenderer.invoke("app:copyToClipboard", text) as Promise<void>
   },
   sites: {
     list: () => ipcRenderer.invoke("sites:list"),

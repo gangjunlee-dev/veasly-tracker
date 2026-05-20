@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS orders (
   warehouse_status TEXT NOT NULL DEFAULT 'NOT_ARRIVED',
   warehouse_arrived_at TEXT,
   warehouse_scan_id INTEGER,
+  tracking_number TEXT,
+  normalized_tracking_number TEXT,
   raw_data TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -44,6 +46,8 @@ CREATE INDEX IF NOT EXISTS idx_orders_order_date ON orders(order_date);
 CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);
 CREATE INDEX IF NOT EXISTS idx_orders_shipping_status ON orders(shipping_status);
 CREATE INDEX IF NOT EXISTS idx_orders_invoice_number ON orders(invoice_number);
+CREATE INDEX IF NOT EXISTS idx_orders_warehouse_status ON orders(warehouse_status);
+CREATE INDEX IF NOT EXISTS idx_orders_tracking_normalized ON orders(normalized_tracking_number);
 
 CREATE TABLE IF NOT EXISTS extraction_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +66,6 @@ CREATE TABLE IF NOT EXISTS extraction_logs (
 
 CREATE INDEX IF NOT EXISTS idx_extraction_logs_site_id ON extraction_logs(site_id);
 CREATE INDEX IF NOT EXISTS idx_extraction_logs_started_at ON extraction_logs(started_at);
-
 
 CREATE TABLE IF NOT EXISTS inbound_scans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,8 +110,3 @@ CREATE INDEX IF NOT EXISTS idx_inbound_scan_matches_scan_id
 
 CREATE INDEX IF NOT EXISTS idx_inbound_scan_matches_order_id
   ON inbound_scan_matches(order_id);
-CREATE TABLE IF NOT EXISTS _migrations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-);

@@ -291,6 +291,11 @@ export type WarehouseAutoMatchResult = {
   matchedScanCount: number;
   unmatchedScanCount: number;
   matchedOrderCount: number;
+  matchedScans: Array<{
+    scan: WarehouseInboundScan;
+    matchedOrders: WarehouseMatchedOrder[];
+  }>;
+  unmatchedScans: WarehouseInboundScan[];
 };
 
 export type WarehouseFindOrdersByTrackingResult = {
@@ -303,6 +308,7 @@ declare global {
       app: {
         ping: () => Promise<string>;
         getVersion: () => Promise<string>;
+        copyToClipboard: (text: string) => Promise<void>;
       };
       sites: {
         list: () => Promise<Site[]>;

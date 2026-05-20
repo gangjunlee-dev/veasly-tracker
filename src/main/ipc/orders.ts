@@ -1,11 +1,12 @@
 import { ipcMain } from "electron";
 import { z } from "zod";
 import crypto from "node:crypto";
-import { getDb } from "../db/client";
+import { ensureOrdersRuntimeColumns, getDb } from "../db/client";
+import { normalizeTrackingNumber } from "../utils/tracking";
 
 const PaginationSchema = z.object({
   page: z.number().int().positive().default(1),
-  pageSize: z.number().int().positive().max(500).default(50)
+  pageSize: z.number().int().positive().max(2000).default(50)
 });
 
 const DateFilterSchema = z.object({
@@ -235,21 +236,25 @@ function makeOliveYoungLineOrderNumber(input: {
 function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoungSnapshotSchema>) {
   const db = getDb();
 
+  // Belt-and-suspenders: ensure tracking columns exist even if startup
+  // migration was skipped on this machine.
+  ensureOrdersRuntimeColumns(db);
+
   const site = db
     .prepare("SELECT id, code, enabled FROM sites WHERE id = ?")
     .get(input.siteId) as { id: number; code: string; enabled: number } | undefined;
 
   if (!site) {
-    throw new Error(`Site not found: ${input.siteId}`);
+    throw new Error(`사이트를 찾을 수 없습니다 (id=${input.siteId}).`);
   }
 
   if (!site.enabled) {
-    throw new Error(`Site is disabled: ${input.siteId}`);
+    throw new Error(`비활성화된 사이트입니다 (id=${input.siteId}).`);
   }
 
   if (site.code !== "oliveyoung") {
     throw new Error(
-      `Site code must be oliveyoung for this import. Received: ${site.code}`
+      `이 가져오기는 올리브영 사이트에서만 가능합니다 (현재 code=${site.code}).`
     );
   }
 
@@ -270,9 +275,11 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
       invoice_number,
       invoice_url,
       shipping_status,
+      tracking_number,
+      normalized_tracking_number,
       raw_data
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(site_id, order_number)
     DO UPDATE SET
       order_date = excluded.order_date,
@@ -283,6 +290,8 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
       invoice_number = excluded.invoice_number,
       invoice_url = excluded.invoice_url,
       shipping_status = excluded.shipping_status,
+      tracking_number = excluded.tracking_number,
+      normalized_tracking_number = excluded.normalized_tracking_number,
       raw_data = excluded.raw_data,
       updated_at = datetime('now')
     `
@@ -348,6 +357,11 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
 
       const existing = checkExisting.get(input.siteId, orderNumber);
 
+      const trackingNumber = item.trackingNumber ?? item.invoiceNumber ?? null;
+      const normalizedTracking = trackingNumber
+        ? normalizeTrackingNumber(trackingNumber) || null
+        : null;
+
       upsert.run(
         input.siteId,
         orderNumber,
@@ -359,6 +373,8 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
         item.invoiceNumber ?? null,
         item.invoiceUrl ?? null,
         item.shippingStatus ?? null,
+        trackingNumber,
+        normalizedTracking,
         rawData
       );
 

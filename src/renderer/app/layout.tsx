@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { Toaster } from "sonner";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Veasly Tracker",
-  description: "Cross-border order extraction console"
+  description: "쇼핑몰 주문·입고 통합 운영 콘솔"
 };
 
 export default function RootLayout({
@@ -13,7 +14,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko">
-      <body>{children}</body>
+      <body>
+        {children}
+        <Toaster
+          position="top-right"
+          richColors
+          closeButton
+          toastOptions={{
+            duration: 3500
+          }}
+        />
+      </body>
     </html>
   );
 }

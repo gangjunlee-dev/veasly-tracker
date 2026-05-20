@@ -1,5 +1,10 @@
 "use client";
 
+import { Search, X } from "lucide-react";
+import { Button } from "./ui/Button";
+import { Card } from "./ui/Card";
+import { Input, Select } from "./ui/Input";
+
 export type OrderFilterState = {
   search: string;
   status: string;
@@ -24,13 +29,13 @@ type OrderFiltersProps = {
 };
 
 const statusOptions = [
-  { label: "All", value: "ALL" },
-  { label: "결제완료", value: "PAID" },
-  { label: "출고준비", value: "READY" },
-  { label: "배송중", value: "SHIPPED" },
-  { label: "배송완료", value: "DELIVERED" },
+  { label: "전체 상태", value: "ALL" },
+  { label: "결제 완료", value: "PAID" },
+  { label: "출고 준비", value: "READY" },
+  { label: "배송 중", value: "SHIPPED" },
+  { label: "배송 완료", value: "DELIVERED" },
   { label: "대기", value: "PENDING" },
-  { label: "결제오류", value: "PAYMENT_ERROR" },
+  { label: "결제 오류", value: "PAYMENT_ERROR" },
   { label: "취소", value: "CANCELLED" }
 ];
 
@@ -50,123 +55,92 @@ export function OrderFilters({
   resultCount,
   totalCount
 }: OrderFiltersProps) {
-  const update = (patch: Partial<OrderFilterState>) => {
-    onChange({
-      ...value,
-      ...patch
-    });
-  };
+  const update = (patch: Partial<OrderFilterState>) =>
+    onChange({ ...value, ...patch });
 
-  const reset = () => {
-    onChange(defaultOrderFilters);
-  };
+  const reset = () => onChange(defaultOrderFilters);
+
+  const showReset =
+    value.search ||
+    value.status !== "ALL" ||
+    value.siteId !== "ALL" ||
+    value.fromDate ||
+    value.toDate;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-bold text-slate-900">Order Filters</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            주문번호, 상품명, 상태, 사이트, 기간으로 주문을 필터링합니다.
-          </p>
+    <Card className="p-5">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-[14rem] flex-1">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground-subtle" />
+            <Input
+              value={value.search}
+              placeholder="주문번호, 상품명, 송장번호 검색"
+              onChange={(event) => update({ search: event.target.value })}
+              className="pl-9"
+            />
+          </div>
         </div>
 
-        <div className="text-right text-xs text-slate-500">
-          {typeof resultCount === "number" && typeof totalCount === "number" ? (
-            <span>
-              Showing <span className="font-bold text-slate-900">{resultCount}</span> /{" "}
-              <span className="font-bold text-slate-900">{totalCount}</span>
-            </span>
-          ) : null}
-        </div>
-      </div>
+        <Select
+          value={value.status}
+          onChange={(event) => update({ status: event.target.value })}
+          className="w-36"
+        >
+          {statusOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </Select>
 
-      <div className="mt-5 grid gap-3 lg:grid-cols-[1.4fr_0.9fr_0.9fr_0.9fr_0.9fr_auto]">
-        <div>
-          <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
-            Search
-          </label>
-          <input
-            value={value.search}
-            placeholder="Order no. or product"
-            onChange={(event) => update({ search: event.target.value })}
-            className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-          />
-        </div>
-
-        <div>
-          <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
-            Status
-          </label>
-          <select
-            value={value.status}
-            onChange={(event) => update({ status: event.target.value })}
-            className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
+        {showSiteFilter && (
+          <Select
+            value={value.siteId}
+            onChange={(event) => update({ siteId: event.target.value })}
+            className="w-48"
           >
-            {statusOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
+            <option value="ALL">전체 쇼핑몰</option>
+            {sites.map((site) => (
+              <option key={site.id} value={String(site.id)}>
+                {site.name}
               </option>
             ))}
-          </select>
-        </div>
-
-        {showSiteFilter ? (
-          <div>
-            <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
-              Site
-            </label>
-            <select
-              value={value.siteId}
-              onChange={(event) => update({ siteId: event.target.value })}
-              className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-            >
-              <option value="ALL">All Sites</option>
-              {sites.map((site) => (
-                <option key={site.id} value={String(site.id)}>
-                  {site.name} ({site.code})
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : (
-          <div className="hidden lg:block" />
+          </Select>
         )}
 
-        <div>
-          <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
-            From
-          </label>
-          <input
-            type="date"
-            value={value.fromDate}
-            onChange={(event) => update({ fromDate: event.target.value })}
-            className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-          />
-        </div>
+        <Input
+          type="date"
+          value={value.fromDate}
+          onChange={(event) => update({ fromDate: event.target.value })}
+          className="w-40"
+          aria-label="시작일"
+        />
+        <span className="self-center text-foreground-subtle">~</span>
+        <Input
+          type="date"
+          value={value.toDate}
+          onChange={(event) => update({ toDate: event.target.value })}
+          className="w-40"
+          aria-label="종료일"
+        />
 
-        <div>
-          <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
-            To
-          </label>
-          <input
-            type="date"
-            value={value.toDate}
-            onChange={(event) => update({ toDate: event.target.value })}
-            className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-          />
-        </div>
+        {showReset && (
+          <Button variant="ghost" size="sm" onClick={reset}>
+            <X className="h-3.5 w-3.5" />
+            초기화
+          </Button>
+        )}
 
-        <div className="flex items-end">
-          <button
-            type="button"
-            onClick={reset}
-            className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
-          >
-            Reset
-          </button>
-        </div>
+        {typeof resultCount === "number" && typeof totalCount === "number" && (
+          <span className="ml-auto text-sm text-foreground-muted">
+            <span className="font-semibold text-foreground">
+              {resultCount.toLocaleString("ko-KR")}
+            </span>{" "}
+            / {totalCount.toLocaleString("ko-KR")} 건
+          </span>
+        )}
       </div>
-    </section>
+    </Card>
   );
 }

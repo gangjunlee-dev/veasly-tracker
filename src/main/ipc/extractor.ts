@@ -1,8 +1,21 @@
 import { ipcMain } from "electron";
 import { z } from "zod";
 import crypto from "node:crypto";
-import { getDb } from "../db/client";
+import { ensureOrdersRuntimeColumns, getDb } from "../db/client";
 import { decrypt } from "../crypto/vault";
+import { normalizeTrackingNumber } from "../utils/tracking";
+import { createLogger } from "../utils/logger";
+import {
+  cleanupStaleRunningLogs as cleanupStaleRunningLogsFromRepo,
+  createExtractionLog,
+  finishExtractionLog
+} from "../services/logs-repo";
+import {
+  getSiteWithCredentials,
+  touchSiteExtractedAt
+} from "../services/sites-repo";
+
+const log = createLogger("extractor");
 import {
   getExtractor,
   listExtractors,
@@ -82,123 +95,15 @@ function normalizeProgress(
   };
 }
 
-function getSiteForExtraction(siteId: number) {
-  const db = getDb();
-
-  return db
-    .prepare(
-      `
-      SELECT
-        id,
-        code,
-        name,
-        username,
-        password_ciphertext,
-        password_iv,
-        password_auth_tag,
-        enabled
-      FROM sites
-      WHERE id = ?
-      `
-    )
-    .get(siteId) as
-    | {
-        id: number;
-        code: string;
-        name: string;
-        username: string;
-        password_ciphertext: string;
-        password_iv: string;
-        password_auth_tag: string;
-        enabled: number;
-      }
-    | undefined;
-}
-
-function createLog(siteId: number): number {
-  const db = getDb();
-
-  const result = db
-    .prepare(
-      `
-      INSERT INTO extraction_logs (
-        site_id,
-        status,
-        message
-      )
-      VALUES (?, 'running', ?)
-      `
-    )
-    .run(siteId, "Extraction started");
-
-  return Number(result.lastInsertRowid);
-}
-
-function finishLog(input: {
-  logId: number;
-  status: "success" | "failed" | "cancelled";
-  message?: string;
-  totalOrders?: number;
-  newOrders?: number;
-  updatedOrders?: number;
-  errorStack?: string;
-}) {
-  const db = getDb();
-
-  db.prepare(
-    `
-    UPDATE extraction_logs
-    SET
-      status = ?,
-      finished_at = datetime('now'),
-      message = ?,
-      total_orders = ?,
-      new_orders = ?,
-      updated_orders = ?,
-      error_stack = ?
-    WHERE id = ?
-    `
-  ).run(
-    input.status,
-    input.message ?? null,
-    input.totalOrders ?? 0,
-    input.newOrders ?? 0,
-    input.updatedOrders ?? 0,
-    input.errorStack ?? null,
-    input.logId
-  );
-}
-
 function cleanupStaleRunningLogs(): number {
   try {
-    const db = getDb();
-
-    const result = db
-      .prepare(
-        `
-        UPDATE extraction_logs
-        SET
-          status = 'failed',
-          finished_at = datetime('now'),
-          message = 'Extraction interrupted before completion'
-        WHERE status = 'running'
-          AND finished_at IS NULL
-          AND started_at < datetime('now', '-30 minutes')
-        `
-      )
-      .run();
-
-    const changes = Number(result.changes ?? 0);
-
+    const changes = cleanupStaleRunningLogsFromRepo();
     if (changes > 0) {
-      console.warn(
-        `[extractor] Cleaned up ${changes} stale running extraction log(s)`
-      );
+      log.warn(`Cleaned up ${changes} stale running extraction log(s)`);
     }
-
     return changes;
   } catch (error) {
-    console.warn("[extractor] Failed to clean up stale running logs", error);
+    log.warn("Failed to clean up stale running logs", error);
     return 0;
   }
 }
@@ -257,6 +162,10 @@ function dbNumberForOrder(value: unknown, fallback: number): number {
 function upsertOrders(siteId: number, orders: StandardOrder[]) {
   const db = getDb();
 
+  // Belt-and-suspenders: even if the startup migration was skipped on this
+  // machine for any reason, guarantee the columns exist before INSERT.
+  ensureOrdersRuntimeColumns(db);
+
   const checkExisting = db.prepare(
     "SELECT id FROM orders WHERE site_id = ? AND order_number = ?"
   );
@@ -274,9 +183,11 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
       invoice_number,
       invoice_url,
       shipping_status,
+      tracking_number,
+      normalized_tracking_number,
       raw_data
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(site_id, order_number)
     DO UPDATE SET
       order_date = excluded.order_date,
@@ -287,6 +198,8 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
       invoice_number = excluded.invoice_number,
       invoice_url = excluded.invoice_url,
       shipping_status = excluded.shipping_status,
+      tracking_number = excluded.tracking_number,
+      normalized_tracking_number = excluded.normalized_tracking_number,
       raw_data = excluded.raw_data,
       updated_at = datetime('now')
     `
@@ -310,6 +223,14 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
         dbNullableTextForOrder(order.invoiceUrl) ??
         dbNullableTextForOrder(rawObjectForDb.trackingUrl);
 
+      const trackingNumberForDb =
+        dbNullableTextForOrder(rawObjectForDb.trackingNumber) ??
+        invoiceNumberForDb;
+
+      const normalizedTrackingForDb = trackingNumberForDb
+        ? normalizeTrackingNumber(trackingNumberForDb) || null
+        : null;
+
       upsert.run(
         siteId,
         dbRequiredTextForOrder(order.orderNumber),
@@ -321,6 +242,8 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
         invoiceNumberForDb,
         invoiceUrlForDb,
         dbNullableTextForOrder(order.shippingStatus),
+        trackingNumberForDb,
+        normalizedTrackingForDb,
         rawDataForDb
       );
 
@@ -348,17 +271,17 @@ async function runExtraction(input: {
   sendProgress: ProgressReporter;
   abortController: AbortController;
 }) {
-  const site = getSiteForExtraction(input.siteId);
+  const site = getSiteWithCredentials(input.siteId);
 
   if (!site) {
-    throw new Error(`Site not found: ${input.siteId}`);
+    throw new Error(`사이트를 찾을 수 없습니다 (id=${input.siteId}).`);
   }
 
   if (!site.enabled) {
-    throw new Error(`Site is disabled: ${input.siteId}`);
+    throw new Error(`비활성화된 사이트입니다 (id=${input.siteId}).`);
   }
 
-  const logId = createLog(site.id);
+  const logId = createExtractionLog(site.id);
   const extractor = getExtractor(site.code);
 
   // Musinsa does not reliably support pure headless/background login checks.
@@ -382,10 +305,22 @@ async function runExtraction(input: {
   const credentials = {
     username: site.username,
     password: await decrypt({
-      ciphertext: site.password_ciphertext,
-      iv: site.password_iv,
-      authTag: site.password_auth_tag
+      ciphertext: site.passwordCiphertext,
+      iv: site.passwordIv,
+      authTag: site.passwordAuthTag
     })
+  };
+
+  // Single source of truth: any progress event flowing through this run is stamped
+  // with the orchestrator's runId/siteId/siteCode, even if the extractor passed
+  // placeholders ("", 0).
+  const sendProgress: ProgressReporter = (progress) => {
+    input.sendProgress({
+      ...progress,
+      runId: input.runId,
+      siteId: site.id,
+      siteCode: site.code
+    });
   };
 
   const report = (
@@ -393,7 +328,7 @@ async function runExtraction(input: {
     message: string,
     extra?: Partial<ExtractionProgress>
   ) => {
-    input.sendProgress({
+    sendProgress({
       runId: input.runId,
       siteId: site.id,
       siteCode: site.code,
@@ -435,7 +370,7 @@ async function runExtraction(input: {
       report("login", "Login required");
       report("login", "Opening browser for login with persistent profile");
 
-      await extractor.login(page, credentials, input.sendProgress);
+      await extractor.login(page, credentials, sendProgress);
       await extractor.saveSession(context);
       report("session", "Session saved");
     } else {
@@ -452,7 +387,7 @@ async function runExtraction(input: {
     const orders = await extractor.extractOrders(
       page,
       effectiveOptions,
-      input.sendProgress
+      sendProgress
     );
 
     if (input.abortController.signal.aborted) {
@@ -465,18 +400,9 @@ async function runExtraction(input: {
 
     const result = upsertOrders(site.id, orders);
 
-    getDb()
-      .prepare(
-        `
-        UPDATE sites
-        SET last_extracted_at = datetime('now'),
-            updated_at = datetime('now')
-        WHERE id = ?
-        `
-      )
-      .run(site.id);
+    touchSiteExtractedAt(site.id);
 
-    finishLog({
+    finishExtractionLog({
       logId,
       status: "success",
       message: "Extraction completed",
@@ -493,7 +419,7 @@ async function runExtraction(input: {
       input.abortController.signal.aborted ||
       (error instanceof Error && error.message.includes("cancelled"));
 
-    finishLog({
+    finishExtractionLog({
       logId,
       status: isCancelled ? "cancelled" : "failed",
       message:
@@ -559,7 +485,7 @@ export function registerExtractorIpc() {
   abortController
 })
   .catch((error) => {
-    console.error("[extractor] run failed", error);
+    log.error("run failed", error);
   })
   .finally(() => {
     if (runningSiteJobs.get(input.siteId) === runId) {
