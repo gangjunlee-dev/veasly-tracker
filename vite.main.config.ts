@@ -11,7 +11,7 @@ export default defineConfig({
       fileName: () => "main.js"
     },
     rollupOptions: {
-      external: [
+      external: ["electron-log/main", "electron-log", 
         "electron",
         "better-sqlite3",
         "keytar",
