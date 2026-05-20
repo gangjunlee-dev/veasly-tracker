@@ -144,6 +144,27 @@ export type ExtractionOptions = {
   lastOrderDate?: string;
   includeNoTracking?: boolean;
   headless?: boolean;
+      maxOrders?: number;
+      limit?: number;
+      maxItems?: number;
+      take?: number;
+      count?: number;
+
+      trackingLimit?: number;
+      maxTracking?: number;
+      maxTrackingOrders?: number;
+      trackingCount?: number;
+
+      includeTracking?: boolean;
+      onlyTrackable?: boolean;
+      trackingOnly?: boolean;
+      debugShippingDiagnostic?: boolean;
+      diagnosticLimit?: number;
+
+      naverpay?: Record<string, unknown>;
+      naverPay?: Record<string, unknown>;
+      extra?: Record<string, unknown>;
+      [key: string]: unknown;
 };
 
 export type ExtractionProgressPhase =

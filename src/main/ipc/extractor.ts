@@ -25,8 +25,32 @@ const RunExtractorSchema = z.object({
       maxPages: z.number().int().positive().optional(),
       lastOrderDate: z.string().optional(),
       includeNoTracking: z.boolean().optional(),
-      headless: z.boolean().optional()
+      headless: z.boolean().optional(),
+
+      // Site-specific extractor options. Keep explicit keys for typing/validation,
+      // and passthrough below so future extractor-specific options are not stripped.
+      maxOrders: z.number().int().positive().optional(),
+      limit: z.number().int().positive().optional(),
+      maxItems: z.number().int().positive().optional(),
+      take: z.number().int().positive().optional(),
+      count: z.number().int().positive().optional(),
+
+      trackingLimit: z.number().int().positive().optional(),
+      maxTracking: z.number().int().positive().optional(),
+      maxTrackingOrders: z.number().int().positive().optional(),
+      trackingCount: z.number().int().positive().optional(),
+
+      includeTracking: z.boolean().optional(),
+      onlyTrackable: z.boolean().optional(),
+      trackingOnly: z.boolean().optional(),
+      debugShippingDiagnostic: z.boolean().optional(),
+      diagnosticLimit: z.number().int().positive().optional(),
+
+      naverpay: z.record(z.any()).optional(),
+      naverPay: z.record(z.any()).optional(),
+      extra: z.record(z.any()).optional()
     })
+    .passthrough()
     .optional()
 });
 
@@ -179,6 +203,57 @@ function cleanupStaleRunningLogs(): number {
   }
 }
 
+
+function normalizeOrderRawDataForDb(rawData: unknown): string | null {
+  if (rawData === undefined || rawData === null) return null;
+
+  if (typeof rawData === "string") {
+    return rawData;
+  }
+
+  try {
+    return JSON.stringify(rawData);
+  } catch {
+    return String(rawData);
+  }
+}
+
+function parseOrderRawDataForDb(rawData: unknown): Record<string, unknown> {
+  if (!rawData) return {};
+
+  if (typeof rawData === "string") {
+    try {
+      const parsed = JSON.parse(rawData);
+      return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  }
+
+  if (typeof rawData === "object") {
+    return rawData as Record<string, unknown>;
+  }
+
+  return {};
+}
+
+function dbRequiredTextForOrder(value: unknown, fallback = ""): string {
+  if (value === undefined || value === null) return fallback;
+  const text = String(value);
+  return text.length > 0 ? text : fallback;
+}
+
+function dbNullableTextForOrder(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text.length > 0 ? text : null;
+}
+
+function dbNumberForOrder(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function upsertOrders(siteId: number, orders: StandardOrder[]) {
   const db = getDb();
 
@@ -224,18 +299,29 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
     for (const order of items) {
       const existing = checkExisting.get(siteId, order.orderNumber);
 
+      const rawDataForDb = normalizeOrderRawDataForDb(order.rawData);
+      const rawObjectForDb = parseOrderRawDataForDb(order.rawData);
+
+      const invoiceNumberForDb =
+        dbNullableTextForOrder(order.invoiceNumber) ??
+        dbNullableTextForOrder(rawObjectForDb.trackingNumber);
+
+      const invoiceUrlForDb =
+        dbNullableTextForOrder(order.invoiceUrl) ??
+        dbNullableTextForOrder(rawObjectForDb.trackingUrl);
+
       upsert.run(
         siteId,
-        order.orderNumber,
-        order.orderDate,
-        order.productName,
-        order.quantity,
-        order.amount,
-        order.currency ?? "KRW",
-        order.invoiceNumber ?? null,
-        order.invoiceUrl ?? null,
-        order.shippingStatus ?? null,
-        order.rawData ?? null
+        dbRequiredTextForOrder(order.orderNumber),
+        dbRequiredTextForOrder(order.orderDate),
+        dbRequiredTextForOrder(order.productName),
+        dbNumberForOrder(order.quantity, 1),
+        dbNumberForOrder(order.amount, 0),
+        dbRequiredTextForOrder(order.currency, "KRW"),
+        invoiceNumberForDb,
+        invoiceUrlForDb,
+        dbNullableTextForOrder(order.shippingStatus),
+        rawDataForDb
       );
 
       if (existing) {

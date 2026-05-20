@@ -1037,20 +1037,12 @@ async function enrichNaverPayOrdersWithTrackingForTracking(
         ...(order as any),
         rawData: {
           ...rawData,
-          carrier: trackingInfo.carrier,
-          trackingNumber: trackingInfo.trackingNumber,
-          trackingUrl: trackingInfo.trackingUrl,
-          trackingText: trackingInfo.trackingText
+          carrier: trackingInfo.carrier ?? rawData.carrier ?? null,
+          trackingNumber: trackingInfo.trackingNumber ?? rawData.trackingNumber ?? null,
+          trackingUrl: null,
+          trackingText: null
         }
       };
-
-      if (trackingInfo.carrier) {
-        nextOrder.carrier = trackingInfo.carrier;
-      }
-
-      if (trackingInfo.trackingNumber) {
-        nextOrder.trackingNumber = trackingInfo.trackingNumber;
-      }
 
       if (trackingInfo.carrier || trackingInfo.trackingNumber) {
         found += 1;
@@ -1065,6 +1057,9 @@ async function enrichNaverPayOrdersWithTrackingForTracking(
           message: `Naver Pay 송장 후보 없음: ${(order as any).orderNumber}`
         });
       }
+
+      delete nextOrder.carrier;
+      delete nextOrder.trackingNumber;
 
       enriched.push(nextOrder as StandardOrder);
     } catch (error) {
