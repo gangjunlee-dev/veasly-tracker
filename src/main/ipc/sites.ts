@@ -4,6 +4,7 @@ import {
   createSite,
   deleteSite,
   listSites,
+  resetSiteSession,
   updateSite
 } from "../services/sites-repo";
 
@@ -46,5 +47,10 @@ export function registerSitesIpc() {
   ipcMain.handle("sites:delete", async (_event, rawInput) => {
     const input = DeleteSiteSchema.parse(rawInput);
     return deleteSite(input.id);
+  });
+
+  ipcMain.handle("sites:resetSession", async (_event, rawInput) => {
+    const input = DeleteSiteSchema.parse(rawInput);
+    return resetSiteSession(input.id);
   });
 }

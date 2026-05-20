@@ -27,7 +27,9 @@ const api = {
     list: () => ipcRenderer.invoke("sites:list"),
     create: (input: CreateSiteInput) => ipcRenderer.invoke("sites:create", input),
     update: (input: UpdateSiteInput) => ipcRenderer.invoke("sites:update", input),
-    delete: (input: { id: number }) => ipcRenderer.invoke("sites:delete", input)
+    delete: (input: { id: number }) => ipcRenderer.invoke("sites:delete", input),
+    resetSession: (input: { id: number }) =>
+      ipcRenderer.invoke("sites:resetSession", input)
   },
   orders: {
     listBySite: (input: ListOrdersBySiteInput) =>

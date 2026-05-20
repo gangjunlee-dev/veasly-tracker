@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Save, Trash2 } from "lucide-react";
+import { LogOut, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/Button";
 import { Card, CardBody, CardFooter, CardHeader, CardTitle } from "./ui/Card";
@@ -46,6 +46,7 @@ export function SiteForm({
   const [enabled, setEnabled] = useState(initialSite?.enabled ?? true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     if (!isEdit && extractors.length > 0 && !code) {
@@ -129,6 +130,31 @@ export function SiteForm({
     }
   };
 
+  const handleResetSession = async () => {
+    if (!isEdit || !initialSite) return;
+    const ok = window.confirm(
+      `${initialSite.name} 의 로그인 세션을 초기화하시겠습니까?\n` +
+        "저장된 쿠키와 브라우저 프로필이 삭제되어, 다음 추출 시 새 계정으로 로그인할 수 있습니다.\n" +
+        "(주문 데이터는 그대로 유지됩니다)"
+    );
+    if (!ok) return;
+
+    setResetting(true);
+    try {
+      await window.api.sites.resetSession({ id: initialSite.id });
+      toast.success(
+        `${initialSite.name} 세션을 초기화했습니다. 다음 추출 시 새 로그인 화면이 열립니다.`
+      );
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        error instanceof Error ? error.message : "세션 초기화에 실패했습니다."
+      );
+    } finally {
+      setResetting(false);
+    }
+  };
+
   return (
     <Card>
       <form onSubmit={handleSubmit}>
@@ -205,6 +231,16 @@ export function SiteForm({
             />
           </Field>
 
+          {isEdit && (
+            <div className="rounded-xl border border-info/30 bg-info-soft px-4 py-3 text-xs leading-5 text-info-soft-foreground">
+              <p className="font-semibold">사용자명·비밀번호 변경 안내</p>
+              <p className="mt-1">
+                계정 정보를 바꾸면 저장된 브라우저 세션이 자동으로 초기화됩니다.
+                다음 추출 시 새 계정 정보로 다시 로그인이 진행됩니다.
+              </p>
+            </div>
+          )}
+
           <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-surface-2 px-4 py-3">
             <input
               type="checkbox"
@@ -221,6 +257,33 @@ export function SiteForm({
               </span>
             </span>
           </label>
+
+          {isEdit && (
+            <div className="rounded-xl border border-border bg-surface-2 px-4 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    저장된 로그인 세션 초기화
+                  </p>
+                  <p className="mt-0.5 text-xs leading-5 text-foreground-muted">
+                    이전 계정으로 자동 로그인되는 문제가 있을 때 사용하세요.
+                    쿠키와 브라우저 프로필을 삭제해 다음 추출 시 새 로그인을 강제합니다.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleResetSession}
+                  loading={resetting}
+                  disabled={resetting}
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  세션 초기화
+                </Button>
+              </div>
+            </div>
+          )}
         </CardBody>
 
         <CardFooter className="justify-between">

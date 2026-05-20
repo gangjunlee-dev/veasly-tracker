@@ -1,5 +1,6 @@
 import { getDb } from "../db/client";
 import { encrypt, type EncryptedPayload } from "../crypto/vault";
+import { BaseExtractor } from "../extractors/_base/BaseExtractor";
 
 export type SiteRow = {
   id: number;
@@ -188,6 +189,8 @@ export async function updateSite(params: UpdateSiteParams): Promise<SiteRow> {
     sets.push("name = ?");
     values.push(params.name);
   }
+  const usernameChanged =
+    params.username !== undefined && params.username !== existing.username;
   if (params.username !== undefined) {
     sets.push("username = ?");
     values.push(params.username);
@@ -197,6 +200,7 @@ export async function updateSite(params: UpdateSiteParams): Promise<SiteRow> {
     values.push(params.enabled ? 1 : 0);
   }
 
+  const passwordChanged = params.password !== undefined;
   if (params.password !== undefined) {
     const encrypted: EncryptedPayload = await encrypt(params.password);
     sets.push("password_ciphertext = ?");
@@ -222,6 +226,14 @@ export async function updateSite(params: UpdateSiteParams): Promise<SiteRow> {
       .run(...values);
   }
 
+  // If credentials changed, force the next extraction through a fresh
+  // login by clearing the persistent browser profile + saved session.
+  // Otherwise the stored chrome-profile would log straight back in as
+  // the previous account.
+  if (passwordChanged || usernameChanged) {
+    await BaseExtractor.clearSession(existing.code).catch(() => undefined);
+  }
+
   const updated = getSiteById(params.id);
 
   if (!updated) {
@@ -229,6 +241,23 @@ export async function updateSite(params: UpdateSiteParams): Promise<SiteRow> {
   }
 
   return updated;
+}
+
+/**
+ * Standalone helper for the "log this site out" UI action — wipes any
+ * cached browser context and saved session so the next run prompts for
+ * a fresh login.
+ */
+export async function resetSiteSession(siteId: number): Promise<{
+  success: boolean;
+  code: string;
+}> {
+  const site = getSiteById(siteId);
+  if (!site) {
+    throw new Error(`사이트를 찾을 수 없습니다 (id=${siteId}).`);
+  }
+  await BaseExtractor.clearSession(site.code);
+  return { success: true, code: site.code };
 }
 
 export function deleteSite(id: number): { success: boolean; deletedId: number } {

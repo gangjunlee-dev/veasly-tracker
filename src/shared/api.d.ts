@@ -318,6 +318,10 @@ declare global {
           success: boolean;
           deletedId: number;
         }>;
+        resetSession: (input: { id: number }) => Promise<{
+          success: boolean;
+          code: string;
+        }>;
       };
       orders: {
         listBySite: (

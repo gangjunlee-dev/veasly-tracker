@@ -298,6 +298,40 @@ export abstract class BaseExtractor {
       this.browser = null;
     }
   }
+
+  /**
+   * Tear down every piece of saved state for a given extractor code:
+   *   - any currently cached persistent BrowserContext
+   *   - the encrypted session.enc file
+   *   - the chrome-profile directory (cookies, localStorage, etc.)
+   *
+   * Called when a user changes the shop credentials so the next extraction
+   * is forced through a fresh login instead of reusing the old account's
+   * persistent profile.
+   */
+  public static async clearSession(code: string): Promise<void> {
+    const shared = BaseExtractor.sharedPersistentContexts.get(code);
+    if (shared) {
+      BaseExtractor.sharedPersistentContexts.delete(code);
+      await shared.close().catch(() => undefined);
+    }
+
+    const dir = path.join(app.getPath("userData"), "extractors", code);
+    const sessionFile = path.join(dir, "session.enc");
+    const profileDir = path.join(dir, "chrome-profile");
+
+    try {
+      await fs.promises.rm(sessionFile, { force: true });
+    } catch (error) {
+      log.warn(`[${code}] failed to remove session.enc`, error);
+    }
+
+    try {
+      await fs.promises.rm(profileDir, { recursive: true, force: true });
+    } catch (error) {
+      log.warn(`[${code}] failed to remove chrome-profile`, error);
+    }
+  }
 }
 
 export default BaseExtractor;
