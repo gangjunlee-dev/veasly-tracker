@@ -1,0 +1,8 @@
+{
+  "code": "bunjang",
+  "name": "번개장터",
+  "description": "번개장터 구매 내역 추출 (Open API)",
+  "ordersUrl": "https://openapi.bunjang.co.kr/api/v1/orders",
+  "version": "1.0.0",
+  "enabled": true
+}

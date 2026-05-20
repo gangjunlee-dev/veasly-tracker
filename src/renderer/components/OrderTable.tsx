@@ -106,57 +106,68 @@ export function OrderTable({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
+          {/* table-fixed + 명시적 col 비율로 컬럼 폭 고정 */}
+          <table className="w-full table-fixed text-sm">
+            <colgroup>
+              {/* 상품(주문번호 포함) */}
+              <col className="w-[38%]" />
+              {/* 수량 */}
+              <col className="w-[6%]" />
+              {/* 금액 */}
+              <col className="w-[10%]" />
+              {/* 상태 */}
+              <col className="w-[12%]" />
+              {/* 택배사 */}
+              <col className="w-[12%]" />
+              {/* 송장번호 */}
+              <col className="w-[13%]" />
+              {/* 주문일 */}
+              <col className="w-[9%]" />
+            </colgroup>
             <thead>
               <tr className="border-b border-border bg-surface-2 text-xs uppercase tracking-wide text-foreground-muted">
-                <th className="whitespace-nowrap px-6 py-3 text-left font-semibold">
-                  주문번호
-                </th>
-                <th className="px-6 py-3 text-left font-semibold">상품</th>
-                <th className="whitespace-nowrap px-6 py-3 text-right font-semibold">
-                  수량
-                </th>
-                <th className="whitespace-nowrap px-6 py-3 text-right font-semibold">
-                  금액
-                </th>
-                <th className="whitespace-nowrap px-6 py-3 text-left font-semibold">
-                  상태
-                </th>
-                <th className="whitespace-nowrap px-6 py-3 text-left font-semibold">
-                  택배사
-                </th>
-                <th className="whitespace-nowrap px-6 py-3 text-left font-semibold">
-                  송장번호
-                </th>
-                <th className="whitespace-nowrap px-6 py-3 text-left font-semibold">
-                  주문일
-                </th>
+                <th className="px-4 py-3 text-left font-semibold">상품</th>
+                <th className="px-4 py-3 text-right font-semibold">수량</th>
+                <th className="px-4 py-3 text-right font-semibold">금액</th>
+                <th className="px-4 py-3 text-left font-semibold">상태</th>
+                <th className="px-4 py-3 text-left font-semibold">택배사</th>
+                <th className="px-4 py-3 text-left font-semibold">송장번호</th>
+                <th className="px-4 py-3 text-left font-semibold">주문일</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {orders.map((order) => (
                 <tr key={order.id} className="hover:bg-surface-2">
-                  <td className="whitespace-nowrap px-6 py-3 font-mono text-xs text-foreground-muted">
-                    {order.orderNumber}
-                  </td>
-                  <td className="max-w-[28rem] px-6 py-3">
-                    <div className="truncate font-medium text-foreground">
+                  {/* 상품명 + 주문번호(서브텍스트) */}
+                  <td className="px-4 py-3">
+                    <div
+                      className="truncate font-medium text-foreground"
+                      title={order.productName}
+                    >
                       {order.productName}
                     </div>
+                    <div className="mt-0.5 truncate font-mono text-[11px] text-foreground-subtle">
+                      {order.orderNumber}
+                    </div>
                   </td>
-                  <td className="whitespace-nowrap px-6 py-3 text-right tabular-nums text-foreground-muted">
+                  <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-foreground-muted">
                     {order.quantity ?? 1}
                   </td>
-                  <td className="whitespace-nowrap px-6 py-3 text-right font-semibold tabular-nums text-foreground">
+                  <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-foreground">
                     {formatCurrency(order.amount)}
                   </td>
-                  <td className="whitespace-nowrap px-6 py-3">
+                  <td className="px-4 py-3">
                     <ShippingStatusBadge status={order.shippingStatus} />
                   </td>
-                  <td className="whitespace-nowrap px-6 py-3 text-foreground-muted">
-                    {getCarrier(order)}
+                  <td className="px-4 py-3">
+                    <span
+                      className="block truncate text-foreground-muted"
+                      title={getCarrier(order)}
+                    >
+                      {getCarrier(order)}
+                    </span>
                   </td>
-                  <td className="whitespace-nowrap px-6 py-3 font-mono text-xs">
+                  <td className="px-4 py-3 font-mono text-xs">
                     {order.invoiceUrl ? (
                       <a
                         href={order.invoiceUrl}
@@ -169,12 +180,15 @@ export function OrderTable({
                         <ExternalLink className="h-3 w-3" />
                       </a>
                     ) : (
-                      <span className="text-foreground-subtle">
+                      <span
+                        className="block truncate text-foreground-subtle"
+                        title={order.invoiceNumber ?? ""}
+                      >
                         {maskInvoice(order.invoiceNumber)}
                       </span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-6 py-3 text-foreground-muted">
+                  <td className="whitespace-nowrap px-4 py-3 text-foreground-muted">
                     {formatDate(order.orderDate)}
                   </td>
                 </tr>
