@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import { z } from "zod";
-import { getDb } from "../db/client";
+import { ensureOrdersRuntimeColumns, getDb } from "../db/client";
+import { normalizeTrackingNumber } from "../utils/tracking";
 
 const PaginationSchema = z.object({
   page: z.number().int().positive().default(1),
@@ -24,103 +25,13 @@ const AutoMatchSchema = z
   })
   .optional();
 
-let warehouseSchemaEnsured = false;
-
 function nowIso() {
   return new Date().toISOString();
-}
-
-function normalizeTrackingNumber(input: string) {
-  return input
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/[^0-9A-Za-z-]/g, "")
-    .toUpperCase();
 }
 
 function maskTrackingNumber(value: string) {
   if (value.length <= 8) return value;
   return `${value.slice(0, 4)}****${value.slice(-4)}`;
-}
-
-function ensureWarehouseSchema() {
-  if (warehouseSchemaEnsured) return;
-
-  const db = getDb();
-
-  const columns = db
-    .prepare("PRAGMA table_info(orders)")
-    .all() as Array<{ name: string }>;
-
-  const columnNames = new Set(columns.map((column) => column.name));
-
-  if (!columnNames.has("warehouse_status")) {
-    db.prepare(
-      "ALTER TABLE orders ADD COLUMN warehouse_status TEXT NOT NULL DEFAULT 'NOT_ARRIVED'"
-    ).run();
-  }
-
-  if (!columnNames.has("warehouse_arrived_at")) {
-    db.prepare("ALTER TABLE orders ADD COLUMN warehouse_arrived_at TEXT").run();
-  }
-
-  if (!columnNames.has("warehouse_scan_id")) {
-    db.prepare("ALTER TABLE orders ADD COLUMN warehouse_scan_id INTEGER").run();
-  }
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_orders_warehouse_status
-      ON orders(warehouse_status);
-
-    CREATE INDEX IF NOT EXISTS idx_orders_invoice_number
-      ON orders(invoice_number);
-
-    CREATE TABLE IF NOT EXISTS inbound_scans (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tracking_number TEXT NOT NULL,
-      normalized_tracking_number TEXT NOT NULL UNIQUE,
-      carrier TEXT,
-      raw_input TEXT,
-      status TEXT NOT NULL DEFAULT 'SCANNED',
-      matched_order_count INTEGER NOT NULL DEFAULT 0,
-      scan_count INTEGER NOT NULL DEFAULT 1,
-      scanned_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_scanned_at TEXT,
-      matched_at TEXT,
-      note TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_inbound_scans_tracking
-      ON inbound_scans(normalized_tracking_number);
-
-    CREATE INDEX IF NOT EXISTS idx_inbound_scans_status
-      ON inbound_scans(status);
-
-    CREATE INDEX IF NOT EXISTS idx_inbound_scans_scanned_at
-      ON inbound_scans(scanned_at);
-
-    CREATE TABLE IF NOT EXISTS inbound_scan_matches (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      scan_id INTEGER NOT NULL,
-      order_id INTEGER NOT NULL,
-      match_type TEXT NOT NULL DEFAULT 'AUTO',
-      matched_at TEXT NOT NULL DEFAULT (datetime('now')),
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (scan_id) REFERENCES inbound_scans(id) ON DELETE CASCADE,
-      FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
-      UNIQUE(scan_id, order_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_inbound_scan_matches_scan_id
-      ON inbound_scan_matches(scan_id);
-
-    CREATE INDEX IF NOT EXISTS idx_inbound_scan_matches_order_id
-      ON inbound_scan_matches(order_id);
-  `);
-
-  warehouseSchemaEnsured = true;
 }
 
 function safeParseRawData(rawData: unknown): Record<string, unknown> {
@@ -181,11 +92,13 @@ function mapWarehouseOrderRow(row: Record<string, unknown>) {
       : null,
     carrier: typeof raw.carrier === "string" ? raw.carrier : null,
     trackingNumber:
-      typeof raw.trackingNumber === "string"
-        ? raw.trackingNumber
-        : row.invoice_number
-          ? String(row.invoice_number)
-          : null,
+      row.tracking_number
+        ? String(row.tracking_number)
+        : typeof raw.trackingNumber === "string"
+          ? raw.trackingNumber
+          : row.invoice_number
+            ? String(row.invoice_number)
+            : null,
     sourceOrderNumber:
       typeof raw.sourceOrderNumber === "string" ? raw.sourceOrderNumber : null,
     ordOptNo: typeof raw.ordOptNo === "string" ? raw.ordOptNo : null,
@@ -195,8 +108,6 @@ function mapWarehouseOrderRow(row: Record<string, unknown>) {
 }
 
 function getInboundScanById(scanId: number) {
-  ensureWarehouseSchema();
-
   const db = getDb();
 
   const row = db
@@ -207,8 +118,6 @@ function getInboundScanById(scanId: number) {
 }
 
 function listMatchedOrdersForScan(scanId: number) {
-  ensureWarehouseSchema();
-
   const db = getDb();
 
   const rows = db
@@ -230,11 +139,11 @@ function listMatchedOrdersForScan(scanId: number) {
   return rows.map(mapWarehouseOrderRow);
 }
 
-function findOrdersByTracking(normalizedTrackingNumber: string) {
-  ensureWarehouseSchema();
+function findOrdersByTracking(normalized: string) {
+  if (!normalized) return [];
 
   const db = getDb();
-  const like = `%${normalizedTrackingNumber}%`;
+  ensureOrdersRuntimeColumns(db);
 
   const rows = db
     .prepare(
@@ -245,27 +154,30 @@ function findOrdersByTracking(normalizedTrackingNumber: string) {
         s.code AS site_code
       FROM orders o
       JOIN sites s ON s.id = o.site_id
-      WHERE IFNULL(o.invoice_number, '') = ?
-         OR IFNULL(o.raw_data, '') LIKE ?
+      WHERE o.normalized_tracking_number = ?
+         OR (
+              o.normalized_tracking_number IS NULL
+              AND IFNULL(o.invoice_number, '') = ?
+            )
       ORDER BY o.order_date DESC, o.id DESC
       `
     )
-    .all(normalizedTrackingNumber, like) as Record<string, unknown>[];
+    .all(normalized, normalized) as Record<string, unknown>[];
 
   return rows.map(mapWarehouseOrderRow);
 }
 
 export function registerWarehouseIpc() {
   ipcMain.handle("warehouse:scanInbound", async (_event, rawInput) => {
-    ensureWarehouseSchema();
-
     const input = ScanInboundSchema.parse(rawInput);
     const db = getDb();
 
     const normalized = normalizeTrackingNumber(input.trackingNumber);
 
     if (!normalized) {
-      throw new Error("송장번호를 인식하지 못했습니다. 바코드 값을 다시 확인해 주세요.");
+      throw new Error(
+        "송장번호를 인식하지 못했습니다. 바코드 값을 다시 확인해 주세요."
+      );
     }
 
     const now = nowIso();
@@ -353,8 +265,6 @@ export function registerWarehouseIpc() {
   });
 
   ipcMain.handle("warehouse:listInboundScans", async (_event, rawInput) => {
-    ensureWarehouseSchema();
-
     const input = ListInboundScansSchema.parse(rawInput ?? {});
     const db = getDb();
 
@@ -424,8 +334,6 @@ export function registerWarehouseIpc() {
   });
 
   ipcMain.handle("warehouse:autoMatch", async (_event, rawInput) => {
-    ensureWarehouseSchema();
-
     const input = AutoMatchSchema.parse(rawInput ?? {});
     const db = getDb();
     const now = nowIso();
@@ -443,11 +351,22 @@ export function registerWarehouseIpc() {
         ORDER BY scanned_at ASC, id ASC
         `
       )
-      .all(...(input?.scanId ? [input.scanId] : [])) as Record<string, unknown>[];
+      .all(...(input?.scanId ? [input.scanId] : [])) as Record<
+      string,
+      unknown
+    >[];
 
     let matchedScanCount = 0;
     let unmatchedScanCount = 0;
     let matchedOrderCount = 0;
+
+    type MatchedScanDetail = {
+      scan: ReturnType<typeof mapInboundScanRow>;
+      matchedOrders: ReturnType<typeof mapWarehouseOrderRow>[];
+    };
+
+    const matchedScanDetails: MatchedScanDetail[] = [];
+    const unmatchedScans: ReturnType<typeof mapInboundScanRow>[] = [];
 
     const tx = db.transaction((scans: Record<string, unknown>[]) => {
       for (const scanRow of scans) {
@@ -467,6 +386,14 @@ export function registerWarehouseIpc() {
             WHERE id = ?
             `
           ).run(now, scanId);
+
+          const refreshedRow = db
+            .prepare("SELECT * FROM inbound_scans WHERE id = ?")
+            .get(scanId) as Record<string, unknown> | undefined;
+
+          if (refreshedRow) {
+            unmatchedScans.push(mapInboundScanRow(refreshedRow));
+          }
 
           unmatchedScanCount += 1;
           continue;
@@ -509,6 +436,17 @@ export function registerWarehouseIpc() {
           `
         ).run(matchedOrders.length, now, now, scanId);
 
+        const refreshedRow = db
+          .prepare("SELECT * FROM inbound_scans WHERE id = ?")
+          .get(scanId) as Record<string, unknown> | undefined;
+
+        if (refreshedRow) {
+          matchedScanDetails.push({
+            scan: mapInboundScanRow(refreshedRow),
+            matchedOrders
+          });
+        }
+
         matchedScanCount += 1;
         matchedOrderCount += matchedOrders.length;
       }
@@ -520,13 +458,13 @@ export function registerWarehouseIpc() {
       scannedCount: scanRows.length,
       matchedScanCount,
       unmatchedScanCount,
-      matchedOrderCount
+      matchedOrderCount,
+      matchedScans: matchedScanDetails,
+      unmatchedScans
     };
   });
 
   ipcMain.handle("warehouse:findOrdersByTracking", async (_event, rawInput) => {
-    ensureWarehouseSchema();
-
     const input = ScanInboundSchema.parse(rawInput);
     const normalized = normalizeTrackingNumber(input.trackingNumber);
 

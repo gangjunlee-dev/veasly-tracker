@@ -5,6 +5,9 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 
 type StoredSessionState = Awaited<ReturnType<BrowserContext["storageState"]>>;
 import { decrypt, encrypt, type EncryptedPayload } from "../../crypto/vault";
+import { createLogger } from "../../utils/logger";
+
+const log = createLogger("extractor");
 import type {
   Credentials,
   ExtractionOptions,
@@ -88,7 +91,7 @@ export abstract class BaseExtractor {
       try {
         await sharedContext.cookies();
         this.persistentContext = sharedContext;
-        console.log("[extractor] Reusing shared persistent context:", this.config.code);
+        log.info("Reusing shared persistent context:", this.config.code);
         return sharedContext;
       } catch {
         BaseExtractor.sharedPersistentContexts.delete(this.config.code);
@@ -98,7 +101,7 @@ export abstract class BaseExtractor {
     const runInBackground = options.headless ?? false;
 
     const persistentProfileDir = this.getPersistentProfileDir();
-    console.log("[extractor] Persistent profile dir:", persistentProfileDir);
+    log.info("Persistent profile dir:", persistentProfileDir);
 
     this.persistentContext = await chromium.launchPersistentContext(
       persistentProfileDir,
@@ -169,7 +172,7 @@ export abstract class BaseExtractor {
 
       return undefined;
     } catch (error) {
-      console.warn(`[extractor:${this.config.code}] failed to read stored session state`, error);
+      log.warn(`[${this.config.code}] failed to read stored session state`, error);
       return undefined;
     }
   }
@@ -205,7 +208,7 @@ export abstract class BaseExtractor {
       await context.addCookies(storageState.cookies);
       return true;
     } catch (error) {
-      console.warn(`[extractor:${this.config.code}] failed to load session`, error);
+      log.warn(`[${this.config.code}] failed to load session`, error);
       return false;
     }
   }

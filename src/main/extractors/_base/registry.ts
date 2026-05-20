@@ -1,5 +1,8 @@
 import type { BaseExtractor } from "./BaseExtractor";
 import type { ExtractorConfig } from "./types";
+import { createLogger } from "../../utils/logger";
+
+const log = createLogger("extractor:registry");
 
 export type ExtractorConstructor = new (
   config: ExtractorConfig
@@ -58,7 +61,7 @@ export function loadExtractors() {
     const configModule = configModules[configPath];
 
     if (!configModule) {
-      console.warn(`[extractor:registry] config.json missing for ${folder}`);
+      log.warn(`config.json missing for ${folder}`);
       continue;
     }
 
@@ -66,7 +69,7 @@ export function loadExtractors() {
     const ExtractorClass = moduleValue.default;
 
     if (!config.code) {
-      console.warn(`[extractor:registry] code missing for ${folder}`);
+      log.warn(`code missing for ${folder}`);
       continue;
     }
 
@@ -87,7 +90,7 @@ export function getExtractor(code: string): BaseExtractor {
   const item = registry.get(code);
 
   if (!item) {
-    throw new Error(`Extractor not found: ${code}`);
+    throw new Error(`등록되지 않은 추출기입니다: ${code}`);
   }
 
   return new item.ExtractorClass(item.config);

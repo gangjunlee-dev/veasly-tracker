@@ -100,3 +100,8 @@ tmp/
 tmp/
 
 *.bak*
+
+# Runtime diagnostic dumps from extractors
+naverpay-dom-diagnostic.json
+*-dom-diagnostic.json
+

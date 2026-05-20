@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { cn } from "../lib/format";
+import { ExternalLink, Play, Settings2 } from "lucide-react";
+import { Button } from "./ui/Button";
+import { StatusBadge } from "./ui/StatusBadge";
 
 export type SiteCardSite = {
   id: number;
@@ -9,13 +11,13 @@ export type SiteCardSite = {
   name: string;
   username: string;
   enabled: boolean;
+  lastExtractedAt?: string | null;
 };
 
 type ExtractorInfo = {
   code: string;
   name: string;
   version?: string;
-  enabled?: boolean;
   description?: string;
 };
 
@@ -26,89 +28,99 @@ type SiteCardProps = {
   onExtract: (siteId: number) => void;
 };
 
+function formatRelative(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const diff = Date.now() - date.getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "방금 전";
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}시간 전`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}일 전`;
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
 export function SiteCard({ site, extractor, isRunning, onExtract }: SiteCardProps) {
   const hasExtractor = Boolean(extractor);
   const canRun = site.enabled && hasExtractor && !isRunning;
+  const lastRun = formatRelative(site.lastExtractedAt);
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <div className="vt-card flex flex-col">
+      <div className="flex items-start justify-between gap-3 p-5">
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="text-lg font-bold text-slate-900">{site.name}</h3>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-xs font-semibold",
-                site.enabled
-                  ? "bg-emerald-50 text-emerald-700"
-                  : "bg-slate-100 text-slate-500"
-              )}
-            >
-              {site.enabled ? "Enabled" : "Disabled"}
-            </span>
+            <h3 className="truncate text-base font-semibold text-foreground">
+              {site.name}
+            </h3>
+            {site.enabled ? (
+              <StatusBadge label="활성" tone="success" dot />
+            ) : (
+              <StatusBadge label="비활성" tone="neutral" />
+            )}
           </div>
-
-          <div className="mt-2 space-y-1 text-sm text-slate-500">
-            <p>
-              <span className="font-medium text-slate-700">Code:</span> {site.code}
-            </p>
-            <p>
-              <span className="font-medium text-slate-700">Username:</span>{" "}
-              {site.username}
-            </p>
-          </div>
+          <p className="mt-1 truncate text-xs text-foreground-muted">
+            {site.username}
+          </p>
         </div>
 
-        <div className="text-right">
-          {extractor ? (
-            <div className="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              <div className="font-bold">{extractor.name}</div>
-              <div>v{extractor.version ?? "0.0.0"}</div>
-            </div>
-          ) : (
-            <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              No extractor
-            </div>
-          )}
-        </div>
+        {extractor ? (
+          <span className="vt-chip bg-primary-soft text-primary-soft-foreground ring-primary/20">
+            v{extractor.version ?? "0.0.0"}
+          </span>
+        ) : (
+          <span className="vt-chip bg-warning-soft text-warning-soft-foreground ring-warning/25">
+            추출기 없음
+          </span>
+        )}
       </div>
 
-      {extractor?.description ? (
-        <p className="mt-4 line-clamp-2 text-sm text-slate-500">
-          {extractor.description}
-        </p>
-      ) : null}
+      <div className="flex-1 border-y border-border bg-surface-2 px-5 py-3 text-xs text-foreground-muted">
+        {lastRun ? (
+          <p>
+            최근 추출{" "}
+            <span className="font-semibold text-foreground">{lastRun}</span>
+          </p>
+        ) : (
+          <p>아직 추출 기록이 없습니다.</p>
+        )}
+        {extractor?.description && (
+          <p className="mt-1 line-clamp-2 text-[11px] text-foreground-subtle">
+            {extractor.description}
+          </p>
+        )}
+      </div>
 
-      <div className="mt-5 grid gap-2">
-        <button
-          type="button"
+      <div className="flex items-center gap-2 p-3">
+        <Button
+          variant="primary"
+          className="flex-1"
           disabled={!canRun}
           onClick={() => onExtract(site.id)}
-          className={cn(
-            "w-full rounded-xl px-4 py-3 text-sm font-bold transition",
-            canRun
-              ? "bg-slate-900 text-white hover:bg-slate-700"
-              : "cursor-not-allowed bg-slate-100 text-slate-400"
-          )}
         >
-          {isRunning ? "Extracting..." : "Extract Orders"}
-        </button>
-
-        <div className="grid grid-cols-2 gap-2">
-          <Link
-            href={`/sites/${site.id}`}
-            className="rounded-xl border border-slate-200 px-4 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Detail
-          </Link>
-
-          <Link
-            href={`/sites/${site.id}/settings`}
-            className="rounded-xl border border-slate-200 px-4 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Settings
-          </Link>
-        </div>
+          <Play className="h-3.5 w-3.5" />
+          {isRunning ? "실행 중…" : "지금 추출"}
+        </Button>
+        <Link
+          href={`/extract/${site.id}`}
+          title="상세 옵션"
+          className="vt-button-secondary px-3"
+        >
+          <Settings2 className="h-4 w-4" />
+        </Link>
+        <Link
+          href={`/settings/sites/${site.id}`}
+          title="사이트 설정"
+          className="vt-button-ghost px-3"
+        >
+          <ExternalLink className="h-4 w-4" />
+        </Link>
       </div>
     </div>
   );
