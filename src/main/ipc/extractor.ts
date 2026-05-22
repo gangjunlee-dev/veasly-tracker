@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { ensureOrdersRuntimeColumns, getDb } from "../db/client";
 import { decrypt } from "../crypto/vault";
 import { normalizeTrackingNumber } from "../utils/tracking";
+import { normalizeShippingStatus } from "../utils/shipping-status";
 import { createLogger } from "../utils/logger";
 import {
   cleanupStaleRunningLogs as cleanupStaleRunningLogsFromRepo,
@@ -185,9 +186,21 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
       shipping_status,
       tracking_number,
       normalized_tracking_number,
+      purchase_site_order_id,
+      seller_name,
+      product_option,
+      sku,
+      recipient_name,
+      recipient_phone,
+      carrier,
+      carrier_code,
+      shipping_status_normalized,
+      shipped_at,
+      expected_ship_date,
+      last_synced_at,
       raw_data
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(site_id, order_number)
     DO UPDATE SET
       order_date = excluded.order_date,
@@ -200,6 +213,18 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
       shipping_status = excluded.shipping_status,
       tracking_number = excluded.tracking_number,
       normalized_tracking_number = excluded.normalized_tracking_number,
+      purchase_site_order_id = excluded.purchase_site_order_id,
+      seller_name = excluded.seller_name,
+      product_option = excluded.product_option,
+      sku = excluded.sku,
+      recipient_name = excluded.recipient_name,
+      recipient_phone = excluded.recipient_phone,
+      carrier = excluded.carrier,
+      carrier_code = excluded.carrier_code,
+      shipping_status_normalized = excluded.shipping_status_normalized,
+      shipped_at = excluded.shipped_at,
+      expected_ship_date = excluded.expected_ship_date,
+      last_synced_at = excluded.last_synced_at,
       raw_data = excluded.raw_data,
       updated_at = datetime('now')
     `
@@ -231,6 +256,12 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
         ? normalizeTrackingNumber(trackingNumberForDb) || null
         : null;
 
+      // 송장 유무를 함께 넘겨 상태 텍스트가 불명확할 때만 'shipped'로 보정.
+      const shippingStatusNormalizedForDb = normalizeShippingStatus(
+        order.shippingStatus,
+        { hasTracking: Boolean(trackingNumberForDb) }
+      );
+
       upsert.run(
         siteId,
         dbRequiredTextForOrder(order.orderNumber),
@@ -244,6 +275,18 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
         dbNullableTextForOrder(order.shippingStatus),
         trackingNumberForDb,
         normalizedTrackingForDb,
+        dbNullableTextForOrder(order.purchaseSiteOrderId),
+        dbNullableTextForOrder(order.sellerName),
+        dbNullableTextForOrder(order.productOption),
+        dbNullableTextForOrder(order.sku),
+        dbNullableTextForOrder(order.recipientName),
+        dbNullableTextForOrder(order.recipientPhone),
+        dbNullableTextForOrder(order.carrier),
+        dbNullableTextForOrder(order.carrierCode),
+        shippingStatusNormalizedForDb,
+        dbNullableTextForOrder(order.shippedAt),
+        dbNullableTextForOrder(order.expectedShipDate),
+        nowIso(),
         rawDataForDb
       );
 

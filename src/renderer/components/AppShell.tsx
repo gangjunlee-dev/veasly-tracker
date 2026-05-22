@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   PackageSearch,
   Settings,
+  Truck,
   type LucideIcon,
   Zap
 } from "lucide-react";
@@ -40,6 +41,12 @@ const navItems: NavItem[] = [
     label: "주문",
     description: "전체 주문 조회 / CSV",
     icon: ClipboardList
+  },
+  {
+    href: "/purchase-orders/unshipped",
+    label: "미발송 주문",
+    description: "구매했지만 발송 전",
+    icon: Truck
   },
   {
     href: "/extract",

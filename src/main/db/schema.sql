@@ -34,6 +34,19 @@ CREATE TABLE IF NOT EXISTS orders (
   warehouse_scan_id INTEGER,
   tracking_number TEXT,
   normalized_tracking_number TEXT,
+  -- Phase 1: 구매사이트 주문 모니터링 확장 필드
+  purchase_site_order_id TEXT,
+  seller_name TEXT,
+  product_option TEXT,
+  sku TEXT,
+  recipient_name TEXT,
+  recipient_phone TEXT,
+  carrier TEXT,
+  carrier_code TEXT,
+  shipping_status_normalized TEXT,
+  shipped_at TEXT,
+  expected_ship_date TEXT,
+  last_synced_at TEXT,
   raw_data TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -48,6 +61,8 @@ CREATE INDEX IF NOT EXISTS idx_orders_shipping_status ON orders(shipping_status)
 CREATE INDEX IF NOT EXISTS idx_orders_invoice_number ON orders(invoice_number);
 CREATE INDEX IF NOT EXISTS idx_orders_warehouse_status ON orders(warehouse_status);
 CREATE INDEX IF NOT EXISTS idx_orders_tracking_normalized ON orders(normalized_tracking_number);
+CREATE INDEX IF NOT EXISTS idx_orders_shipping_status_normalized ON orders(shipping_status_normalized);
+CREATE INDEX IF NOT EXISTS idx_orders_purchase_site_order_id ON orders(purchase_site_order_id);
 
 CREATE TABLE IF NOT EXISTS extraction_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

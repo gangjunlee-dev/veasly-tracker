@@ -45,6 +45,19 @@ export type Order = {
   warehouseStatus?: string;
   warehouseArrivedAt?: string | null;
   warehouseScanId?: number | null;
+  // Phase 1: 구매사이트 주문 모니터링 필드 (사이트 미제공 시 null)
+  purchaseSiteOrderId?: string | null;
+  sellerName?: string | null;
+  productOption?: string | null;
+  sku?: string | null;
+  recipientName?: string | null;
+  recipientPhone?: string | null;
+  carrier?: string | null;
+  carrierCode?: string | null;
+  shippingStatusNormalized?: string | null;
+  shippedAt?: string | null;
+  expectedShipDate?: string | null;
+  lastSyncedAt?: string | null;
   rawData: string | null;
   createdAt: string;
   updatedAt: string;
@@ -79,6 +92,27 @@ export type ExportOrdersInput = {
   dateFrom?: string;
   dateTo?: string;
   search?: string;
+};
+
+export type ListUnshippedOrdersInput = {
+  page?: number;
+  pageSize?: number;
+  siteIds?: number[];
+  dateFrom?: string;
+  dateTo?: string;
+  status?: string;
+  seller?: string;
+  search?: string;
+  minDaysSincePurchase?: number;
+  delayThresholdDays?: number;
+};
+
+export type UnshippedOrdersResult = PaginatedResult<Order> & {
+  summary: {
+    total: number;
+    delayed: number;
+    delayThresholdDays: number;
+  };
 };
 
 
@@ -331,6 +365,9 @@ declare global {
           input: ListAllOrdersInput
         ) => Promise<PaginatedResult<Order>>;
         export: (input: ExportOrdersInput) => Promise<string>;
+        listUnshipped: (
+          input?: ListUnshippedOrdersInput
+        ) => Promise<UnshippedOrdersResult>;
         importOliveYoungSnapshot: (
           input: ImportOliveYoungSnapshotInput
         ) => Promise<ImportOliveYoungSnapshotResult>;

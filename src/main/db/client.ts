@@ -143,6 +143,20 @@ function migrateLegacySchema(database: Database.Database) {
     "TEXT"
   );
 
+  // Phase 1: 구매사이트 주문 모니터링 확장 컬럼 (기존 DB 업그레이드용)
+  ensureOrdersColumn(database, "purchase_site_order_id", "TEXT");
+  ensureOrdersColumn(database, "seller_name", "TEXT");
+  ensureOrdersColumn(database, "product_option", "TEXT");
+  ensureOrdersColumn(database, "sku", "TEXT");
+  ensureOrdersColumn(database, "recipient_name", "TEXT");
+  ensureOrdersColumn(database, "recipient_phone", "TEXT");
+  ensureOrdersColumn(database, "carrier", "TEXT");
+  ensureOrdersColumn(database, "carrier_code", "TEXT");
+  ensureOrdersColumn(database, "shipping_status_normalized", "TEXT");
+  ensureOrdersColumn(database, "shipped_at", "TEXT");
+  ensureOrdersColumn(database, "expected_ship_date", "TEXT");
+  ensureOrdersColumn(database, "last_synced_at", "TEXT");
+
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_orders_warehouse_status
       ON orders(warehouse_status);
@@ -150,6 +164,10 @@ function migrateLegacySchema(database: Database.Database) {
       ON orders(normalized_tracking_number);
     CREATE INDEX IF NOT EXISTS idx_orders_invoice_number
       ON orders(invoice_number);
+    CREATE INDEX IF NOT EXISTS idx_orders_shipping_status_normalized
+      ON orders(shipping_status_normalized);
+    CREATE INDEX IF NOT EXISTS idx_orders_purchase_site_order_id
+      ON orders(purchase_site_order_id);
   `);
 
   if (trackingAdded || normalizedAdded) {
@@ -204,6 +222,18 @@ export function ensureOrdersRuntimeColumns(database: Database.Database) {
   ensureOrdersColumn(database, "warehouse_scan_id", "INTEGER");
   ensureOrdersColumn(database, "tracking_number", "TEXT");
   ensureOrdersColumn(database, "normalized_tracking_number", "TEXT");
+  ensureOrdersColumn(database, "purchase_site_order_id", "TEXT");
+  ensureOrdersColumn(database, "seller_name", "TEXT");
+  ensureOrdersColumn(database, "product_option", "TEXT");
+  ensureOrdersColumn(database, "sku", "TEXT");
+  ensureOrdersColumn(database, "recipient_name", "TEXT");
+  ensureOrdersColumn(database, "recipient_phone", "TEXT");
+  ensureOrdersColumn(database, "carrier", "TEXT");
+  ensureOrdersColumn(database, "carrier_code", "TEXT");
+  ensureOrdersColumn(database, "shipping_status_normalized", "TEXT");
+  ensureOrdersColumn(database, "shipped_at", "TEXT");
+  ensureOrdersColumn(database, "expected_ship_date", "TEXT");
+  ensureOrdersColumn(database, "last_synced_at", "TEXT");
 }
 
 export function closeDb() {

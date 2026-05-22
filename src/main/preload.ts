@@ -7,6 +7,7 @@ import type {
   ExtractionOptions,
   ExtractionProgress,
   ListAllOrdersInput,
+  ListUnshippedOrdersInput,
   ListExtractionLogsInput,
   ListExtractionLogsBySiteInput,
   ListInboundScansInput,
@@ -36,6 +37,8 @@ const api = {
       ipcRenderer.invoke("orders:listBySite", input),
     listAll: (input: ListAllOrdersInput) =>
       ipcRenderer.invoke("orders:listAll", input),
+    listUnshipped: (input?: ListUnshippedOrdersInput) =>
+      ipcRenderer.invoke("orders:listUnshipped", input ?? {}),
     export: (input: ExportOrdersInput) =>
       ipcRenderer.invoke("orders:export", input),
     importOliveYoungSnapshot: (input: ImportOliveYoungSnapshotInput) =>

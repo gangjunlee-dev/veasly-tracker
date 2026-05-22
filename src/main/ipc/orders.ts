@@ -3,6 +3,7 @@ import { z } from "zod";
 import crypto from "node:crypto";
 import { ensureOrdersRuntimeColumns, getDb } from "../db/client";
 import { normalizeTrackingNumber } from "../utils/tracking";
+import { normalizeShippingStatus } from "../utils/shipping-status";
 
 const PaginationSchema = z.object({
   page: z.number().int().positive().default(1),
@@ -28,6 +29,15 @@ const ExportSchema = DateFilterSchema.extend({
   siteIds: z.array(z.number().int().positive()).optional(),
   siteId: z.number().int().positive().optional(),
   search: z.string().optional()
+});
+
+const ListUnshippedSchema = PaginationSchema.merge(DateFilterSchema).extend({
+  siteIds: z.array(z.number().int().positive()).optional(),
+  status: z.string().optional(),
+  seller: z.string().optional(),
+  search: z.string().optional(),
+  minDaysSincePurchase: z.number().int().nonnegative().optional(),
+  delayThresholdDays: z.number().int().positive().optional()
 });
 
 
@@ -85,6 +95,20 @@ function mapOrderRow(row: Record<string, unknown>) {
     warehouseStatus: row.warehouse_status ? String(row.warehouse_status) : "NOT_ARRIVED",
     warehouseArrivedAt: row.warehouse_arrived_at ? String(row.warehouse_arrived_at) : null,
     warehouseScanId: row.warehouse_scan_id ? Number(row.warehouse_scan_id) : null,
+    purchaseSiteOrderId: row.purchase_site_order_id ? String(row.purchase_site_order_id) : null,
+    sellerName: row.seller_name ? String(row.seller_name) : null,
+    productOption: row.product_option ? String(row.product_option) : null,
+    sku: row.sku ? String(row.sku) : null,
+    recipientName: row.recipient_name ? String(row.recipient_name) : null,
+    recipientPhone: row.recipient_phone ? String(row.recipient_phone) : null,
+    carrier: row.carrier ? String(row.carrier) : null,
+    carrierCode: row.carrier_code ? String(row.carrier_code) : null,
+    shippingStatusNormalized: row.shipping_status_normalized
+      ? String(row.shipping_status_normalized)
+      : null,
+    shippedAt: row.shipped_at ? String(row.shipped_at) : null,
+    expectedShipDate: row.expected_ship_date ? String(row.expected_ship_date) : null,
+    lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : null,
     rawData: row.raw_data ? String(row.raw_data) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
@@ -277,9 +301,21 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
       shipping_status,
       tracking_number,
       normalized_tracking_number,
+      purchase_site_order_id,
+      seller_name,
+      product_option,
+      sku,
+      recipient_name,
+      recipient_phone,
+      carrier,
+      carrier_code,
+      shipping_status_normalized,
+      shipped_at,
+      expected_ship_date,
+      last_synced_at,
       raw_data
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(site_id, order_number)
     DO UPDATE SET
       order_date = excluded.order_date,
@@ -292,6 +328,18 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
       shipping_status = excluded.shipping_status,
       tracking_number = excluded.tracking_number,
       normalized_tracking_number = excluded.normalized_tracking_number,
+      purchase_site_order_id = excluded.purchase_site_order_id,
+      seller_name = excluded.seller_name,
+      product_option = excluded.product_option,
+      sku = excluded.sku,
+      recipient_name = excluded.recipient_name,
+      recipient_phone = excluded.recipient_phone,
+      carrier = excluded.carrier,
+      carrier_code = excluded.carrier_code,
+      shipping_status_normalized = excluded.shipping_status_normalized,
+      shipped_at = excluded.shipped_at,
+      expected_ship_date = excluded.expected_ship_date,
+      last_synced_at = excluded.last_synced_at,
       raw_data = excluded.raw_data,
       updated_at = datetime('now')
     `
@@ -324,6 +372,7 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
 
   let newOrders = 0;
   let updatedOrders = 0;
+  const syncedAt = new Date().toISOString();
 
   const tx = db.transaction(() => {
     input.snapshot.items.forEach((item, index) => {
@@ -362,6 +411,11 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
         ? normalizeTrackingNumber(trackingNumber) || null
         : null;
 
+      const shippingStatusNormalized = normalizeShippingStatus(
+        item.shippingStatus ?? null,
+        { hasTracking: Boolean(trackingNumber) }
+      );
+
       upsert.run(
         input.siteId,
         orderNumber,
@@ -375,6 +429,19 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
         item.shippingStatus ?? null,
         trackingNumber,
         normalizedTracking,
+        // 구매사이트 모니터링 필드 — 스냅샷에 실제로 있는 값만 채운다(없으면 null).
+        sourceOrderNumber,
+        null, // seller_name: 올리브영 스냅샷 미제공
+        null, // product_option: 올리브영 스냅샷 미제공
+        item.goodsNo ?? null,
+        null, // recipient_name: 올리브영 스냅샷 미제공
+        null, // recipient_phone: 올리브영 스냅샷 미제공
+        item.carrier ?? null,
+        item.carrierCode ?? null,
+        shippingStatusNormalized,
+        null, // shipped_at: 올리브영 스냅샷 미제공
+        null, // expected_ship_date: expectedDeliveryDate는 '도착 예정'이라 의미가 달라 매핑 안 함
+        syncedAt,
         rawData
       );
 
@@ -552,5 +619,103 @@ export function registerOrdersIpc() {
       .all(...params) as Record<string, unknown>[];
 
     return toCsv(rows.map(mapOrderRow));
+  });
+
+  // 미발송(구매했지만 아직 발송 전) 주문 목록 + 지연 요약.
+  // "미발송" 정의: 송장번호·택배사 정보가 모두 없고, 정규 배송상태가
+  // 발송 전 단계(purchased/awaiting_shipment/preparing_shipment/unknown).
+  ipcMain.handle("orders:listUnshipped", async (_event, rawInput) => {
+    const input = ListUnshippedSchema.parse(rawInput ?? {});
+    const db = getDb();
+    ensureOrdersRuntimeColumns(db);
+
+    const where: string[] = [
+      "(o.tracking_number IS NULL OR o.tracking_number = '')",
+      "(o.carrier IS NULL OR o.carrier = '')",
+      "IFNULL(o.shipping_status_normalized, 'unknown') IN ('purchased', 'awaiting_shipment', 'preparing_shipment', 'unknown')"
+    ];
+    const params: unknown[] = [];
+
+    if (input.siteIds && input.siteIds.length > 0) {
+      where.push(`o.site_id IN (${input.siteIds.map(() => "?").join(", ")})`);
+      params.push(...input.siteIds);
+    }
+
+    if (input.dateFrom) {
+      where.push("o.order_date >= ?");
+      params.push(input.dateFrom);
+    }
+
+    if (input.dateTo) {
+      where.push("o.order_date <= ?");
+      params.push(input.dateTo);
+    }
+
+    if (input.status) {
+      where.push("IFNULL(o.shipping_status_normalized, 'unknown') = ?");
+      params.push(input.status);
+    }
+
+    if (input.seller) {
+      where.push("IFNULL(o.seller_name, '') LIKE ?");
+      params.push(`%${input.seller.trim()}%`);
+    }
+
+    if (input.search) {
+      where.push("o.product_name LIKE ?");
+      params.push(`%${input.search.trim()}%`);
+    }
+
+    if (typeof input.minDaysSincePurchase === "number") {
+      where.push("substr(o.order_date, 1, 10) <= date('now', ?)");
+      params.push(`-${input.minDaysSincePurchase} days`);
+    }
+
+    const whereSql = `WHERE ${where.join(" AND ")}`;
+    const offset = (input.page - 1) * input.pageSize;
+
+    const totalRow = db
+      .prepare(`SELECT COUNT(*) AS total FROM orders o ${whereSql}`)
+      .get(...params) as { total: number };
+
+    const delayThresholdDays = input.delayThresholdDays ?? 3;
+    const delayedRow = db
+      .prepare(
+        `
+        SELECT COUNT(*) AS delayed
+        FROM orders o
+        ${whereSql}
+        AND substr(o.order_date, 1, 10) <= date('now', ?)
+        `
+      )
+      .get(...params, `-${delayThresholdDays} days`) as { delayed: number };
+
+    const rows = db
+      .prepare(
+        `
+        SELECT
+          o.*,
+          s.name AS site_name,
+          s.code AS site_code
+        FROM orders o
+        JOIN sites s ON s.id = o.site_id
+        ${whereSql}
+        ORDER BY o.order_date ASC, o.id ASC
+        LIMIT ? OFFSET ?
+        `
+      )
+      .all(...params, input.pageSize, offset) as Record<string, unknown>[];
+
+    return {
+      items: rows.map(mapOrderRow),
+      total: Number(totalRow.total),
+      page: input.page,
+      pageSize: input.pageSize,
+      summary: {
+        total: Number(totalRow.total),
+        delayed: Number(delayedRow.delayed),
+        delayThresholdDays
+      }
+    };
   });
 }
