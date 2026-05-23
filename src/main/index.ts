@@ -8,6 +8,7 @@ import { registerOrdersIpc } from "./ipc/orders";
 import { registerExtractorIpc } from "./ipc/extractor";
 import { registerLogsIpc } from "./ipc/logs";
 import { registerWarehouseIpc } from "./ipc/warehouse";
+import { registerAdminSyncHandlers } from "./ipc/admin-sync";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -35,6 +36,7 @@ function registerIpc() {
   registerExtractorIpc();
   registerLogsIpc();
   registerWarehouseIpc();
+  registerAdminSyncHandlers();
 }
 
 function installContentSecurityPolicy() {

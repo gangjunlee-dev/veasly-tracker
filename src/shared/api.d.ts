@@ -302,6 +302,53 @@ export type WarehouseFindOrdersByTrackingResult = {
   trackingNumber: string;
   items: WarehouseMatchedOrder[];
 };
+
+export type AdminSyncResult = {
+  ok: boolean;
+  totalOrders?: number;
+  newOrders?: number;
+  updatedOrders?: number;
+  error?: string;
+};
+
+export type AdminMatchResult = {
+  ok: boolean;
+  total?: number;
+  auto?: number;
+  suggest?: number;
+  trackerTotal?: number;
+  adminTotal?: number;
+};
+
+export type AdminMatch = {
+  id: number;
+  tracker_order_id: number;
+  admin_item_id: number;
+  match_score: number;
+  match_reasons: string;
+  match_type: string;
+  confirmed: number;
+  tracker_order_number: string;
+  tracker_product_name: string;
+  tracker_amount: number;
+  tracker_tracking: string | null;
+  tracker_site_code: string;
+  admin_item_number: string;
+  admin_product_name: string;
+  admin_purchase_url: string | null;
+  admin_price_krw: number;
+  veasly_order_number: string;
+};
+
+export type AdminStats = {
+  ok: boolean;
+  adminOrders: number;
+  adminItems: number;
+  totalMatches: number;
+  autoMatches: number;
+  suggestMatches: number;
+  lastSync: any;
+};
 declare global {
   interface Window {
     api: {
@@ -348,6 +395,14 @@ declare global {
         findOrdersByTracking: (
           input: WarehouseScanInboundInput
         ) => Promise<WarehouseFindOrdersByTrackingResult>;
+      };
+      admin: {
+        login: (username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+        sync: () => Promise<AdminSyncResult>;
+        match: () => Promise<AdminMatchResult>;
+        getMatches: (input: { type?: string }) => Promise<{ ok: boolean; matches: AdminMatch[] }>;
+        confirmMatch: (matchId: number, confirm: boolean) => Promise<{ ok: boolean }>;
+        stats: () => Promise<AdminStats>;
       };
       logs: {
         list: (
