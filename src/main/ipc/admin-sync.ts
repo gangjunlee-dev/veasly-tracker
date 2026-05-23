@@ -12,7 +12,8 @@ import { getDb, ensureOrdersColumn } from "../db/client";
 import {
   adminLogin,
   fetchOrders,
-  fetchFullOrder,
+  fetchOrderDetail,
+  fetchCombinedBase,
   type AdminSession,
   type AdminItemData,
 } from "../services/admin-api";
@@ -109,6 +110,8 @@ export function registerAdminSyncHandlers() {
       const logResult = logInsert.run();
       const logId = logResult.lastInsertRowid;
 
+      const CANCEL_STATUSES = ["CANCEL_COMPLETED", "CANCEL_REQUESTED"];
+
       try {
         for (const status of statuses) {
           for (let page = 0; page < maxPages; page++) {
@@ -119,30 +122,55 @@ export function registerAdminSyncHandlers() {
             });
             if (!listData.data || listData.data.length === 0) break;
 
-            for (const order of listData.data) {
-              const orderNumber = order.orderNumber;
+            for (const listOrder of listData.data) {
+              const orderNumber = listOrder.orderNumber;
               totalOrders++;
 
-              // 상세 데이터 가져오기
-              const fullOrder = await fetchFullOrder(token, orderNumber);
-              if (!fullOrder) continue;
+              // 목록 데이터에서 기본 정보 추출 (추가 API 호출 불필요)
+              const payment = listOrder.payment || {};
+              const isCombined = (listOrder.children || []).length > 0;
 
-              // 주문 upsert
+              // detail API 1번만 호출 (아이템 정보 필요)
+              let detailItems = await fetchOrderDetail(token, orderNumber);
+
+              // detail 실패 시 combined-detail 시도
+              if (detailItems.length === 0 && isCombined) {
+                const combined = await fetchCombinedBase(token, orderNumber);
+                if (combined) {
+                  try {
+                    const detRes = await fetch(
+                      `https://api.veasly.com/admin/orders/${orderNumber}/combined-shipping-detail`,
+                      { headers: { Authorization: `Bearer ${token}` } }
+                    );
+                    if (detRes.ok) {
+                      const detData = await detRes.json() as any;
+                      detailItems = (detData.data || []).flatMap(
+                        (child: any) => child.items || []
+                      );
+                    }
+                  } catch {}
+                }
+              }
+
+              // 주문 upsert (목록 데이터 기반)
               const existingRow = getAdminOrderId.get(orderNumber) as
                 | { id: number }
                 | undefined;
               const isNew = !existingRow;
+              const hasFreeShipping = listOrder.items?.some(
+                (it: any) => it.isFreeShipping
+              ) || false;
 
               upsertOrder.run(
-                fullOrder.orderNumber,
-                fullOrder.orderedAt,
-                fullOrder.status,
-                fullOrder.totalAmountLocal,
-                fullOrder.currency,
-                fullOrder.isCombined ? 1 : 0,
-                fullOrder.hasFreeShipping ? 1 : 0,
-                fullOrder.customerName,
-                fullOrder.shippingAddressType
+                orderNumber,
+                listOrder.orderedAt || "",
+                listOrder.status || "",
+                payment.totalAmountLocal || 0,
+                payment.currency || "TWD",
+                isCombined ? 1 : 0,
+                hasFreeShipping ? 1 : 0,
+                listOrder.customer?.name || "",
+                listOrder.shippingAddress?.type || ""
               );
 
               const adminOrderRow = getAdminOrderId.get(orderNumber) as {
@@ -152,27 +180,35 @@ export function registerAdminSyncHandlers() {
 
               // 아이템 재동기화
               deleteItems.run(adminOrderId);
-              for (const item of fullOrder.items) {
+              for (const it of detailItems) {
+                const ph = (it.purchaseHistory || [])[0];
+                const domesticShip = (it.shippingInfo || []).find(
+                  (s: any) => s.isDomestic
+                );
+                const overseasShip = (it.shippingInfo || []).find(
+                  (s: any) => !s.isDomestic && s.vendor
+                );
+
                 upsertItem.run(
                   adminOrderId,
-                  item.orderItemNumber,
-                  item.productName,
-                  item.brand,
-                  item.detailUrl,
-                  item.priceLocal,
-                  item.priceKRW,
-                  item.quantity,
-                  item.estimatedWeight,
-                  item.status,
-                  item.isFreeShipping ? 1 : 0,
-                  item.isCancelled ? 1 : 0,
-                  item.purchaseUrl,
-                  item.purchasePrice,
-                  item.cardApprovalCode,
-                  item.cardProvider,
-                  item.domesticTracking,
-                  item.overseasTracking,
-                  item.overseasVendor
+                  it.orderItemNumber || "",
+                  it.product?.name || "",
+                  it.product?.brand || "",
+                  it.product?.detailUrl || "",
+                  it.priceLocal || 0,
+                  it.priceKRW || 0,
+                  it.quantity || 1,
+                  it.weight || it.product?.weight || 0,
+                  it.status || "",
+                  it.isFreeShipping ? 1 : 0,
+                  CANCEL_STATUSES.includes(it.status || "") ? 1 : 0,
+                  ph?.url || null,
+                  ph?.purchasePrice || null,
+                  ph?.cardProviderApprovalCode || null,
+                  ph?.cardProviderName || null,
+                  domesticShip?.trackingNumber || null,
+                  overseasShip?.trackingNumber || null,
+                  overseasShip?.vendor?.text || null
                 );
               }
 
