@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Boxes,
   ClipboardList,
+  GitCompare,
   History,
   LayoutDashboard,
   PackageSearch,
@@ -58,6 +59,12 @@ const navItems: NavItem[] = [
     label: "추출 이력",
     description: "실행 로그 / 결과",
     icon: History
+  },
+  {
+    href: "/admin-sync",
+    label: "Admin 동기화",
+    description: "Veasly Admin 매칭",
+    icon: GitCompare
   },
   {
     href: "/settings",
