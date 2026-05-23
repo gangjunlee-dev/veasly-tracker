@@ -77,6 +77,20 @@ const api = {
         ipcRenderer.removeListener("extractor:progress", listener);
       };
     }
+  },
+
+  admin: {
+    login: (username: string, password: string) =>
+      ipcRenderer.invoke("admin:login", username, password),
+    status: () => ipcRenderer.invoke("admin:status"),
+    sync: (opts?: { statuses?: string[]; maxPages?: number }) =>
+      ipcRenderer.invoke("admin:sync", opts),
+    match: () => ipcRenderer.invoke("admin:match"),
+    getMatches: (filter?: { type?: string; confirmed?: boolean }) =>
+      ipcRenderer.invoke("admin:getMatches", filter),
+    confirmMatch: (matchId: number, confirmed: boolean) =>
+      ipcRenderer.invoke("admin:confirmMatch", matchId, confirmed),
+    stats: () => ipcRenderer.invoke("admin:stats"),
   }
 };
 
