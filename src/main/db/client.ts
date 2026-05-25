@@ -185,6 +185,7 @@ export function getDb(): Database.Database {
     console.error("[db] applyMigrations failed", error);
   }
   migrateLegacySchema(db);
+  ensureAdminTables(db);
 
   return db;
 }
@@ -194,6 +195,98 @@ export function getDb(): Database.Database {
  * the orders schema actually has every column the runtime expects, even
  * if some earlier migration step was silently skipped on this machine.
  */
+/**
+ * admin 테이블이 올바른 스키마로 존재하는지 보장합니다.
+ * 잘못된 스키마로 생성된 테이블은 DROP 후 재생성합니다.
+ */
+function ensureAdminTables(database: Database.Database) {
+  // kv 테이블
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS kv (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // admin_orders — order_number 컬럼이 있는지 확인
+  const aoExists = database.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='admin_orders' LIMIT 1"
+  ).get();
+
+  if (aoExists) {
+    const cols = database.prepare("PRAGMA table_info(admin_orders)").all() as Array<{ name: string }>;
+    const colNames = new Set(cols.map(c => c.name));
+    if (!colNames.has("order_number")) {
+      // 잘못된 스키마 — DROP 후 재생성
+      database.exec("DROP TABLE IF EXISTS admin_order_items");
+      database.exec("DROP TABLE IF EXISTS admin_orders");
+    }
+  }
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS admin_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_number TEXT NOT NULL UNIQUE,
+      order_status TEXT NOT NULL,
+      customer_name TEXT,
+      customer_phone TEXT,
+      customer_address TEXT,
+      total_amount INTEGER,
+      currency TEXT DEFAULT 'TWD',
+      item_count INTEGER DEFAULT 0,
+      synced_at TEXT NOT NULL,
+      raw_data TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_admin_orders_status ON admin_orders(order_status);
+    CREATE INDEX IF NOT EXISTS idx_admin_orders_synced ON admin_orders(synced_at);
+
+    CREATE TABLE IF NOT EXISTS admin_order_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      admin_order_id INTEGER NOT NULL REFERENCES admin_orders(id) ON DELETE CASCADE,
+      order_item_id INTEGER NOT NULL,
+      vy_code TEXT NOT NULL DEFAULT '',
+      product_name TEXT,
+      product_id INTEGER,
+      item_status TEXT NOT NULL DEFAULT '',
+      domestic_tracking_number TEXT,
+      domestic_carrier TEXT,
+      intl_tracking_number TEXT,
+      intl_carrier TEXT,
+      warehouse_status TEXT DEFAULT 'PENDING',
+      warehouse_matched_at TEXT,
+      warehouse_scan_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(admin_order_id, order_item_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_aoi_vy_code ON admin_order_items(vy_code);
+    CREATE INDEX IF NOT EXISTS idx_aoi_item_status ON admin_order_items(item_status);
+    CREATE INDEX IF NOT EXISTS idx_aoi_domestic_tracking ON admin_order_items(domestic_tracking_number);
+    CREATE INDEX IF NOT EXISTS idx_aoi_warehouse_status ON admin_order_items(warehouse_status);
+    CREATE INDEX IF NOT EXISTS idx_aoi_order_id ON admin_order_items(admin_order_id);
+
+    CREATE TABLE IF NOT EXISTS match_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      tracking_number TEXT,
+      order_item_id INTEGER,
+      vy_code TEXT,
+      order_number TEXT,
+      product_name TEXT,
+      admin_synced INTEGER DEFAULT 0,
+      admin_error TEXT,
+      retry_count INTEGER DEFAULT 0,
+      details TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_event ON match_audit_log(event_type);
+    CREATE INDEX IF NOT EXISTS idx_audit_created ON match_audit_log(created_at);
+  `);
+}
+
 export function ensureOrdersRuntimeColumns(database: Database.Database) {
   ensureOrdersColumn(
     database,

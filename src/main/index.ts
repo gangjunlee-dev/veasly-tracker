@@ -8,6 +8,7 @@ import { registerOrdersIpc } from "./ipc/orders";
 import { registerExtractorIpc } from "./ipc/extractor";
 import { registerLogsIpc } from "./ipc/logs";
 import { registerWarehouseIpc } from "./ipc/warehouse";
+import { registerAdminIpc } from "./ipc/admin";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -35,6 +36,7 @@ function registerIpc() {
   registerExtractorIpc();
   registerLogsIpc();
   registerWarehouseIpc();
+  registerAdminIpc();
 }
 
 function installContentSecurityPolicy() {
@@ -57,7 +59,7 @@ function installContentSecurityPolicy() {
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob:",
         "font-src 'self' data:",
-        "connect-src 'self'",
+        "connect-src 'self' https://admin.veasly.com https://api.veasly.com",
         "object-src 'none'",
         "base-uri 'self'",
         "frame-ancestors 'none'"
@@ -120,6 +122,20 @@ function createMainWindow() {
     if (!app.isPackaged) {
       mainWindow?.webContents.openDevTools({ mode: "detach" });
     }
+
+    // 앱 시작 시 admin 자동 로그인 (백그라운드, UI 차단 없음)
+    mainWindow?.webContents
+      .executeJavaScript("window.api?.admin?.autoLogin?.()")
+      .then((result: any) => {
+        if (result?.ok) {
+          logger.info(`[main] Admin 자동 로그인 성공 (${result.method})`);
+        } else {
+          logger.info(`[main] Admin 자동 로그인 생략: ${result?.reason ?? "unknown"}`);
+        }
+      })
+      .catch(() => {
+        // 자동 로그인 실패는 치명적이지 않음 — 무시
+      });
   });
 
   // External links (target="_blank" etc.) open in the OS browser, never in app.

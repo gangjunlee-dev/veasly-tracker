@@ -57,6 +57,37 @@ const api = {
     listBySite: (input: ListExtractionLogsBySiteInput) =>
       ipcRenderer.invoke("logs:listBySite", input)
   },
+  admin: {
+    saveCredentials: (input: { username: string; password: string }) =>
+      ipcRenderer.invoke("admin:saveCredentials", input),
+    login: () => ipcRenderer.invoke("admin:login"),
+    status: () => ipcRenderer.invoke("admin:status"),
+    logout: () => ipcRenderer.invoke("admin:logout"),
+    autoLogin: () => ipcRenderer.invoke("admin:autoLogin"),
+    sync: () => ipcRenderer.invoke("admin:sync"),
+    syncStatus: () => ipcRenderer.invoke("admin:syncStatus"),
+    listItems: (input?: {
+      page?: number;
+      pageSize?: number;
+      status?: string;
+      warehouseStatus?: string;
+      search?: string;
+    }) => ipcRenderer.invoke("admin:listItems", input),
+    matchBarcode: (input: { trackingNumber: string }) =>
+      ipcRenderer.invoke("admin:matchBarcode", input),
+    confirmMatch: (input: {
+      orderItemId: number;
+      trackingNumber: string;
+      vyCode: string;
+    }) => ipcRenderer.invoke("admin:confirmMatch", input),
+    searchOrders: (input: { query: string }) =>
+      ipcRenderer.invoke("admin:searchOrders", input),
+    recentMatches: (input?: { limit?: number }) =>
+      ipcRenderer.invoke("admin:recentMatches", input),
+    auditLog: (input?: { limit?: number; eventType?: string }) =>
+      ipcRenderer.invoke("admin:auditLog", input),
+    retryPending: () => ipcRenderer.invoke("admin:retryPending"),
+  },
   extractor: {
     available: () => ipcRenderer.invoke("extractor:available"),
     run: (input: { siteId: number; options?: ExtractionOptions }) =>

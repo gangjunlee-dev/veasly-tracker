@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ArrowRight,
   Database,
+  Globe,
   KeyRound,
   ShieldCheck,
   ShoppingBag
@@ -22,17 +23,22 @@ export default function SettingsPage() {
   const [siteCount, setSiteCount] = useState(0);
   const [enabledCount, setEnabledCount] = useState(0);
   const [appVersion, setAppVersion] = useState<string>("-");
+  const [adminConnected, setAdminConnected] = useState(false);
+  const [adminUsername, setAdminUsername] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     try {
-      const [sites, version] = await Promise.all([
+      const [sites, version, adminStatus] = await Promise.all([
         window.api.sites.list(),
-        window.api.app.getVersion()
+        window.api.app.getVersion(),
+        window.api.admin.status()
       ]);
       const list = sites as Site[];
       setSiteCount(list.length);
       setEnabledCount(list.filter((site) => site.enabled).length);
       setAppVersion(String(version));
+      setAdminConnected(adminStatus.tokenValid);
+      setAdminUsername(adminStatus.username);
     } catch {
       // silent
     }
@@ -43,6 +49,15 @@ export default function SettingsPage() {
   }, [loadData]);
 
   const tiles = [
+    {
+      href: "/settings/admin",
+      icon: Globe,
+      title: "Admin 연동",
+      description: "admin.veasly.com 계정을 연결하여 주문 동기화를 활성화합니다.",
+      stat: adminConnected
+        ? `연결됨 · ${adminUsername ?? ""}`
+        : "미연결"
+    },
     {
       href: "/settings/sites",
       icon: ShoppingBag,

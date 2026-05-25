@@ -6,9 +6,12 @@ import { useEffect, useState } from "react";
 import {
   Boxes,
   ClipboardList,
+  FileText,
   History,
   LayoutDashboard,
+  List,
   PackageSearch,
+  ScanBarcode,
   Settings,
   type LucideIcon,
   Zap
@@ -48,10 +51,31 @@ const navItems: NavItem[] = [
     icon: Zap
   },
   {
+    href: "/warehouse/items",
+    label: "동기화 목록",
+    description: "Admin 주문 아이템 전체",
+    icon: List,
+    match: (pathname) => pathname === "/warehouse/items"
+  },
+  {
+    href: "/warehouse/scan",
+    label: "스캔 매칭",
+    description: "바코드 스캔 / Admin 매칭",
+    icon: ScanBarcode
+  },
+  {
     href: "/warehouse",
     label: "입고",
     description: "송장 스캔 / 자동 매칭",
-    icon: PackageSearch
+    icon: PackageSearch,
+    match: (pathname) => pathname === "/warehouse"
+  },
+  {
+    href: "/warehouse/audit",
+    label: "감사 로그",
+    description: "매칭 이력 / 동기화 검증",
+    icon: FileText,
+    match: (pathname) => pathname === "/warehouse/audit"
   },
   {
     href: "/history",
@@ -70,6 +94,87 @@ const navItems: NavItem[] = [
 function isActive(pathname: string, item: NavItem) {
   if (item.match) return item.match(pathname);
   return pathname === item.href || pathname.startsWith(`${item.href}/`);
+}
+
+type SyncIndicatorState = {
+  connected: boolean | null; // null = 확인 중
+  lastSyncedAt: string | null;
+  totalItems: number;
+};
+
+function SyncStatusIndicator() {
+  const [state, setState] = useState<SyncIndicatorState>({
+    connected: null,
+    lastSyncedAt: null,
+    totalItems: 0,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function check() {
+      try {
+        const [adminStatus, syncStatus] = await Promise.all([
+          window.api?.admin?.status?.(),
+          window.api?.admin?.syncStatus?.(),
+        ]);
+        if (cancelled) return;
+        setState({
+          connected: adminStatus?.tokenValid ?? false,
+          lastSyncedAt: syncStatus?.lastSyncedAt ?? null,
+          totalItems: syncStatus?.totalItems ?? 0,
+        });
+      } catch {
+        if (!cancelled) setState((s) => ({ ...s, connected: false }));
+      }
+    }
+
+    void check();
+    const interval = setInterval(check, 60_000); // 1분마다 갱신
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const dotColor =
+    state.connected === null
+      ? "bg-foreground-subtle animate-pulse"
+      : state.connected
+        ? "bg-success"
+        : "bg-danger";
+
+  const label =
+    state.connected === null
+      ? "확인 중..."
+      : state.connected
+        ? "연결됨"
+        : "미연결";
+
+  const timeStr = state.lastSyncedAt
+    ? (() => {
+        const d = new Date(state.lastSyncedAt);
+        if (Number.isNaN(d.getTime())) return state.lastSyncedAt;
+        return new Intl.DateTimeFormat("ko-KR", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(d);
+      })()
+    : null;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dotColor)} />
+        <span className="text-[11px]">{label}</span>
+      </div>
+      {state.connected && timeStr ? (
+        <p className="text-[10px] tabular-nums text-accent-foreground/40">
+          Sync {timeStr} · {state.totalItems}건
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 export function AppShell({ children }: AppShellProps) {
@@ -149,12 +254,15 @@ export function AppShell({ children }: AppShellProps) {
         </nav>
 
         <div className="border-t border-white/10 px-6 py-4 text-[11px] text-accent-foreground/50">
-          <p className="font-semibold text-accent-foreground/80">
-            Veasly Tracker
-          </p>
-          <p className="tabular-nums">
-            {appVersion ? `v${appVersion}` : "·"} · 로컬 SQLite 보관
-          </p>
+          <SyncStatusIndicator />
+          <div className="mt-2 pt-2 border-t border-white/5">
+            <p className="font-semibold text-accent-foreground/80">
+              Veasly Tracker
+            </p>
+            <p className="tabular-nums">
+              {appVersion ? `v${appVersion}` : "·"} · 로컬 SQLite 보관
+            </p>
+          </div>
         </div>
       </aside>
 

@@ -302,6 +302,96 @@ export type WarehouseFindOrdersByTrackingResult = {
   trackingNumber: string;
   items: WarehouseMatchedOrder[];
 };
+export type AdminStatus = {
+  hasCredentials: boolean;
+  username: string | null;
+  hasToken: boolean;
+  tokenValid: boolean;
+  expires: string | null;
+};
+
+export type AdminLoginResult = {
+  ok: boolean;
+  error?: string;
+  expires?: string;
+};
+
+export type AdminAutoLoginResult = {
+  ok: boolean;
+  method?: "cached" | "login";
+  reason?: string;
+  error?: string;
+};
+
+export type AdminSyncResult = {
+  ok: boolean;
+  error?: string;
+  fetched?: number;
+  created?: number;
+  updated?: number;
+  detailed?: number;
+  errors?: string[];
+};
+
+export type AdminSyncStatus = {
+  totalOrders: number;
+  totalItems: number;
+  byStatus: Record<string, number>;
+  byWarehouse: Record<string, number>;
+  lastSyncedAt: string | null;
+};
+
+export type AdminMatchedItem = {
+  orderItemId: number;
+  vyCode: string;
+  productName: string;
+  itemStatus: string;
+  warehouseStatus: string;
+  warehouseMatchedAt: string | null;
+  domesticTrackingNumber: string | null;
+  domesticCarrier: string | null;
+  orderNumber: string;
+  customerName: string | null;
+  orderStatus: string;
+};
+
+export type AdminMatchBarcodeResult = {
+  matchType: "AUTO" | "PARTIAL" | "NONE";
+  items: AdminMatchedItem[];
+};
+
+export type AdminConfirmMatchResult = {
+  ok: boolean;
+  synced: boolean;
+  reason?: string;
+};
+
+export type AdminAuditEntry = {
+  id: number;
+  eventType: string;
+  trackingNumber: string | null;
+  orderItemId: number | null;
+  vyCode: string | null;
+  orderNumber: string | null;
+  productName: string | null;
+  adminSynced: boolean;
+  adminError: string | null;
+  retryCount: number;
+  createdAt: string;
+};
+
+export type AdminAuditLogResult = {
+  entries: AdminAuditEntry[];
+  stats: Record<string, number>;
+};
+
+export type AdminRetryResult = {
+  retried: number;
+  succeeded: number;
+  failed: number;
+  error?: string;
+};
+
 declare global {
   interface Window {
     api: {
@@ -334,6 +424,49 @@ declare global {
         importOliveYoungSnapshot: (
           input: ImportOliveYoungSnapshotInput
         ) => Promise<ImportOliveYoungSnapshotResult>;
+      };
+      admin: {
+        saveCredentials: (input: {
+          username: string;
+          password: string;
+        }) => Promise<{ ok: boolean }>;
+        login: () => Promise<AdminLoginResult>;
+        status: () => Promise<AdminStatus>;
+        logout: () => Promise<{ ok: boolean }>;
+        autoLogin: () => Promise<AdminAutoLoginResult>;
+        sync: () => Promise<AdminSyncResult>;
+        syncStatus: () => Promise<AdminSyncStatus>;
+        listItems: (input?: {
+          page?: number;
+          pageSize?: number;
+          status?: string;
+          warehouseStatus?: string;
+          search?: string;
+        }) => Promise<{
+          items: AdminMatchedItem[];
+          total: number;
+          page: number;
+          pageSize: number;
+        }>;
+        matchBarcode: (input: {
+          trackingNumber: string;
+        }) => Promise<AdminMatchBarcodeResult>;
+        confirmMatch: (input: {
+          orderItemId: number;
+          trackingNumber: string;
+          vyCode: string;
+        }) => Promise<AdminConfirmMatchResult>;
+        searchOrders: (input: {
+          query: string;
+        }) => Promise<{ results: AdminMatchedItem[] }>;
+        recentMatches: (input?: {
+          limit?: number;
+        }) => Promise<{ items: AdminMatchedItem[] }>;
+        auditLog: (input?: {
+          limit?: number;
+          eventType?: string;
+        }) => Promise<AdminAuditLogResult>;
+        retryPending: () => Promise<AdminRetryResult>;
       };
       warehouse: {
         scanInbound: (
