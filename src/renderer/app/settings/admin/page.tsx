@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CheckCircle2,
+  Cloud,
   Download,
   Globe,
   Loader2,
@@ -57,17 +58,26 @@ export default function AdminSettingsPage() {
   const [loggingIn, setLoggingIn] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Ops 연동
+  const [opsUrl, setOpsUrl] = useState("");
+  const [opsApiKey, setOpsApiKey] = useState("");
+  const [opsHasConfig, setOpsHasConfig] = useState(false);
+  const [opsSaving, setOpsSaving] = useState(false);
+
   const loadStatus = useCallback(async () => {
     try {
-      const [s, ss] = await Promise.all([
+      const [s, ss, opsConfig] = await Promise.all([
         window.api.admin.status(),
         window.api.admin.syncStatus(),
+        window.api.admin.getOpsConfig(),
       ]);
       setStatus(s);
       setSyncStatus(ss);
       if (s.username) {
         setUsername(s.username);
       }
+      if (opsConfig.opsUrl) setOpsUrl(opsConfig.opsUrl);
+      setOpsHasConfig(opsConfig.hasConfig);
     } catch {
       // silent
     } finally {
@@ -159,10 +169,15 @@ export default function AdminSettingsPage() {
     const startTime = Date.now();
     try {
       console.log("[Sync] 동기화 시작...");
-      const result = await window.api.admin.sync();
+      const result = await window.api.admin.sync() as any;
       const elapsed = Date.now() - startTime;
       if (result.ok) {
-        const msg = `동기화 완료 (${elapsed}ms): ${result.fetched ?? 0}건 조회, ${result.created ?? 0}건 신규, ${result.updated ?? 0}건 업데이트`;
+        const opsMsg = result.opsPush?.ok
+          ? ` → Ops 푸시 완료`
+          : result.opsPush
+            ? ` → Ops 푸시 실패`
+            : "";
+        const msg = `동기화 완료 (${elapsed}ms): ${result.fetched ?? 0}건 조회, ${result.created ?? 0}건 신규, ${result.updated ?? 0}건 업데이트${opsMsg}`;
         console.log(`[Sync] ${msg}`);
         if (result.errors && result.errors.length > 0) {
           console.warn(`[Sync] 오류 ${result.errors.length}건:`, result.errors);
@@ -450,6 +465,97 @@ export default function AdminSettingsPage() {
             </div>
           )}
         </CardBody>
+      </Card>
+
+      {/* Ops 연동 */}
+      <Card className="mt-6">
+        <CardHeader>
+          <div>
+            <CardTitle>Ops 연동</CardTitle>
+            <CardDescription>
+              동기화 데이터를 veasly-ops에 자동 푸시합니다. 다른 PC에서도 주문 현황을 볼 수 있습니다.
+            </CardDescription>
+          </div>
+          {opsHasConfig ? (
+            <StatusBadge label="설정됨" tone="success" dot />
+          ) : (
+            <StatusBadge label="미설정" tone="neutral" dot />
+          )}
+        </CardHeader>
+        <CardBody>
+          <div className="space-y-4">
+            <Field label="Ops URL" hint="예: https://veasly-ops.pages.dev">
+              <Input
+                type="url"
+                placeholder="https://veasly-ops.pages.dev"
+                value={opsUrl}
+                onChange={(e) => setOpsUrl(e.target.value)}
+              />
+            </Field>
+            <Field
+              label="API Key"
+              hint={opsHasConfig ? "이미 저장된 키가 있습니다." : undefined}
+            >
+              <Input
+                type="password"
+                placeholder={opsHasConfig ? "********" : "API Key 입력"}
+                value={opsApiKey}
+                onChange={(e) => setOpsApiKey(e.target.value)}
+              />
+            </Field>
+          </div>
+        </CardBody>
+        <CardFooter>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={opsSaving}
+            disabled={!opsUrl.trim() || !opsApiKey.trim()}
+            onClick={async () => {
+              setOpsSaving(true);
+              try {
+                await window.api.admin.saveOpsConfig({
+                  opsUrl: opsUrl.trim(),
+                  opsApiKey: opsApiKey.trim(),
+                });
+                setOpsApiKey("");
+                setOpsHasConfig(true);
+                toast.success("Ops 연동 설정 저장 완료");
+              } catch (err) {
+                toast.error("저장 실패: " + String(err));
+              } finally {
+                setOpsSaving(false);
+              }
+            }}
+          >
+            <Cloud className="mr-1.5 h-3.5 w-3.5" />
+            {opsHasConfig ? "설정 업데이트" : "설정 저장"}
+          </Button>
+          {opsHasConfig ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                try {
+                  toast.info("Ops로 데이터 전송 중...");
+                  const result = await window.api.admin.pushToOps();
+                  if (result.ok) {
+                    toast.success(
+                      `Ops 전송 완료: ${result.created ?? 0}건 신규, ${result.updated ?? 0}건 업데이트`
+                    );
+                  } else {
+                    toast.error("Ops 전송 실패: " + (result.error ?? ""));
+                  }
+                } catch (err) {
+                  toast.error("전송 오류: " + String(err));
+                }
+              }}
+            >
+              <Cloud className="mr-1.5 h-3.5 w-3.5" />
+              지금 전송
+            </Button>
+          ) : null}
+        </CardFooter>
       </Card>
 
       {/* 안내 */}

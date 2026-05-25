@@ -434,6 +434,21 @@ declare global {
         status: () => Promise<AdminStatus>;
         logout: () => Promise<{ ok: boolean }>;
         autoLogin: () => Promise<AdminAutoLoginResult>;
+        saveOpsConfig: (input: {
+          opsUrl: string;
+          opsApiKey: string;
+        }) => Promise<{ ok: boolean }>;
+        getOpsConfig: () => Promise<{
+          opsUrl: string;
+          opsApiKey: string;
+          hasConfig: boolean;
+        }>;
+        pushToOps: () => Promise<{
+          ok: boolean;
+          created?: number;
+          updated?: number;
+          error?: string;
+        }>;
         sync: () => Promise<AdminSyncResult>;
         syncStatus: () => Promise<AdminSyncStatus>;
         listItems: (input?: {

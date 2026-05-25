@@ -64,6 +64,10 @@ const api = {
     status: () => ipcRenderer.invoke("admin:status"),
     logout: () => ipcRenderer.invoke("admin:logout"),
     autoLogin: () => ipcRenderer.invoke("admin:autoLogin"),
+    saveOpsConfig: (input: { opsUrl: string; opsApiKey: string }) =>
+      ipcRenderer.invoke("admin:saveOpsConfig", input),
+    getOpsConfig: () => ipcRenderer.invoke("admin:getOpsConfig"),
+    pushToOps: () => ipcRenderer.invoke("admin:pushToOps"),
     sync: () => ipcRenderer.invoke("admin:sync"),
     syncStatus: () => ipcRenderer.invoke("admin:syncStatus"),
     listItems: (input?: {

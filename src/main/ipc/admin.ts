@@ -12,6 +12,7 @@ import { getDb } from "../db/client";
 import { loginToAdmin } from "../admin-api/auth";
 import { AdminApiClient } from "../admin-api/client";
 import { OrderSync } from "../sync/order-sync";
+import { pushToOps } from "../sync/ops-push";
 import log from "electron-log";
 
 const logger = log.scope("ipc-admin");
@@ -134,6 +135,49 @@ export function registerAdminIpc(): void {
     return { ok: true };
   });
 
+  // ── Ops 연동 설정 ──
+
+  ipcMain.handle("admin:saveOpsConfig", async (_event, rawInput) => {
+    const input = z
+      .object({
+        opsUrl: z.string().url(),
+        opsApiKey: z.string().min(1),
+      })
+      .parse(rawInput);
+
+    kvPut("ops_url", input.opsUrl.replace(/\/$/, "")); // trailing slash 제거
+    kvPut("ops_api_key", input.opsApiKey);
+    logger.info("Ops 연동 설정 저장:", input.opsUrl);
+    return { ok: true };
+  });
+
+  ipcMain.handle("admin:getOpsConfig", async () => {
+    return {
+      opsUrl: kvGet("ops_url") ?? "",
+      opsApiKey: kvGet("ops_api_key") ? "********" : "",
+      hasConfig: !!kvGet("ops_url") && !!kvGet("ops_api_key"),
+    };
+  });
+
+  // ── Ops에 수동 푸시 (기존 로컬 데이터 전송) ──
+
+  ipcMain.handle("admin:pushToOps", async () => {
+    const opsUrl = kvGet("ops_url");
+    const opsApiKey = kvGet("ops_api_key");
+    if (!opsUrl || !opsApiKey) {
+      return { ok: false, error: "Ops 연동 설정이 필요합니다." };
+    }
+
+    const db = getDb();
+    try {
+      const result = await pushToOps(db, opsUrl, opsApiKey);
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  });
+
   // ── 자동 로그인 (앱 시작 시 main에서 호출) ──
   ipcMain.handle("admin:autoLogin", async () => {
     const accessToken = kvGet("admin_access_token");
@@ -196,7 +240,21 @@ export function registerAdminIpc(): void {
 
     try {
       const result = await sync.syncPendingOrders();
-      return { ok: true, ...result };
+
+      // ops 푸시 (설정되어 있으면)
+      const opsUrl = kvGet("ops_url");
+      const opsApiKey = kvGet("ops_api_key");
+      let opsPush = null;
+      if (opsUrl && opsApiKey) {
+        try {
+          opsPush = await pushToOps(db, opsUrl, opsApiKey);
+        } catch (pushErr) {
+          logger.warn("Ops 푸시 실패:", pushErr);
+          opsPush = { ok: false, error: String(pushErr) };
+        }
+      }
+
+      return { ok: true, ...result, opsPush };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
