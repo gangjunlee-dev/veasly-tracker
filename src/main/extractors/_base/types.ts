@@ -9,6 +9,9 @@ export type StandardOrder = {
   invoiceUrl?: string | null;
   shippingStatus?: string | null;
   rawData?: string | null;
+  // 사이트 마이페이지 URL에서 추출 가능한 원본 주문 식별자.
+  // admin_order_items.source_order_ref와 비교해 URL 페어링에 사용.
+  sourceOrderRef?: string | null;
 };
 
 export type ExtractorConfig = {

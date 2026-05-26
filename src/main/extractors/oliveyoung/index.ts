@@ -588,6 +588,7 @@ class OliveYoungExtractor extends BaseExtractor {
         invoiceNumber: null,
         invoiceUrl: null,
         shippingStatus: order.shippingStatus ?? null,
+        sourceOrderRef: order.sourceOrderNumber,
         rawData: JSON.stringify(
           {
             source: "oliveyoung",

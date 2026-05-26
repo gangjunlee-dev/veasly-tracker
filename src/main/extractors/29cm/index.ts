@@ -1088,6 +1088,7 @@ async function extractOrdersFromDetailPage(
           invoiceNumber: undefined,
           invoiceUrl: undefined,
           shippingStatus: item.shippingStatus,
+          sourceOrderRef: sourceOrderNumber,
           rawData: JSON.stringify({
             source: "29cm",
             sourceOrderNumber,
@@ -1186,6 +1187,7 @@ async function extractOrdersFromDetailPage(
       invoiceNumber: tracking.trackingNumber,
       invoiceUrl,
       shippingStatus,
+      sourceOrderRef: sourceOrderNumber,
       rawData: JSON.stringify({
         source: "29cm",
         sourceOrderNumber,
@@ -1841,6 +1843,7 @@ async function extractTwentyNineCmOrdersFromListPage(
       invoiceNumber: item.trackingNumber,
       invoiceUrl,
       shippingStatus,
+      sourceOrderRef: item.sourceOrderNumber,
       rawData: JSON.stringify({
         source: "29cm",
         sourceOrderNumber: item.sourceOrderNumber,

@@ -277,9 +277,10 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
       shipping_status,
       tracking_number,
       normalized_tracking_number,
-      raw_data
+      raw_data,
+      source_order_ref
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(site_id, order_number)
     DO UPDATE SET
       order_date = excluded.order_date,
@@ -293,6 +294,7 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
       tracking_number = excluded.tracking_number,
       normalized_tracking_number = excluded.normalized_tracking_number,
       raw_data = excluded.raw_data,
+      source_order_ref = COALESCE(excluded.source_order_ref, orders.source_order_ref),
       updated_at = datetime('now')
     `
   );
@@ -375,7 +377,8 @@ function importOliveYoungSnapshotToOrders(input: z.infer<typeof ImportOliveYoung
         item.shippingStatus ?? null,
         trackingNumber,
         normalizedTracking,
-        rawData
+        rawData,
+        sourceOrderNumber || null
       );
 
       if (existing) {

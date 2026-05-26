@@ -2,6 +2,8 @@ import { ipcMain } from "electron";
 import { z } from "zod";
 import { ensureOrdersRuntimeColumns, getDb } from "../db/client";
 import { normalizeTrackingNumber } from "../utils/tracking";
+import { pairAdminWithSupplier } from "../services/url-pairing";
+import { pushTrackingsForItems } from "../services/admin-push";
 
 const PaginationSchema = z.object({
   page: z.number().int().positive().default(1),
@@ -24,6 +26,10 @@ const AutoMatchSchema = z
     scanId: z.number().int().positive().optional()
   })
   .optional();
+
+const DeleteInboundScanSchema = z.object({
+  scanId: z.number().int().positive()
+});
 
 function nowIso() {
   return new Date().toISOString();
@@ -338,6 +344,14 @@ export function registerWarehouseIpc() {
     const db = getDb();
     const now = nowIso();
 
+    // Step 1 (URL 페어링): admin_order_items 중 송장이 비어있는 행에 대해
+    // 같은 (siteCode, source_order_ref)의 supplier 주문에서 송장을 복사한다.
+    const pairing = pairAdminWithSupplier(db);
+
+    // Step 2 (Server Write-Back): 새로 송장이 채워진 항목들을 admin API로 push.
+    // 토큰 없으면 noToken=true로 반환되어 UI에서 안내 가능.
+    const push = await pushTrackingsForItems(db, pairing.pairedItemIds);
+
     const scanRows = db
       .prepare(
         `
@@ -460,7 +474,9 @@ export function registerWarehouseIpc() {
       unmatchedScanCount,
       matchedOrderCount,
       matchedScans: matchedScanDetails,
-      unmatchedScans
+      unmatchedScans,
+      pairing,
+      adminPush: push
     };
   });
 
@@ -472,5 +488,19 @@ export function registerWarehouseIpc() {
       trackingNumber: normalized,
       items: findOrdersByTracking(normalized)
     };
+  });
+
+  // 잘못 스캔한 송장을 사용자 화면에서 제거. inbound_scans 행만 삭제하고
+  // 연결된 inbound_scan_matches는 FK CASCADE로 자동 정리된다.
+  // orders.warehouse_scan_id, warehouse_status는 그대로 둔다 (이미 확정된 정보).
+  ipcMain.handle("warehouse:deleteInboundScan", async (_event, rawInput) => {
+    const input = DeleteInboundScanSchema.parse(rawInput);
+    const db = getDb();
+
+    const result = db
+      .prepare("DELETE FROM inbound_scans WHERE id = ?")
+      .run(input.scanId);
+
+    return { ok: true, deleted: result.changes };
   });
 }

@@ -90,6 +90,7 @@ export async function extractOrdersFromDetailPage(
           invoiceNumber: undefined,
           invoiceUrl: undefined,
           shippingStatus: item.shippingStatus,
+          sourceOrderRef: sourceOrderNumber,
           rawData: JSON.stringify({
             source: "musinsa",
             sourceOrderNumber,
@@ -185,6 +186,7 @@ export async function extractOrdersFromDetailPage(
       invoiceNumber: tracking.trackingNumber,
       invoiceUrl,
       shippingStatus,
+      sourceOrderRef: sourceOrderNumber,
       rawData: JSON.stringify({
         source: "musinsa",
         sourceOrderNumber,

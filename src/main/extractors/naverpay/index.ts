@@ -389,6 +389,7 @@ async function extractNaverPayOrdersFromCurrentPage(
       amount: item.amount,
       currency: "KRW",
       shippingStatus: mapNaverPayStatus(item.rawStatus),
+      sourceOrderRef: item.detailId || null,
       rawData: JSON.stringify({
         source: "naverpay",
         rawText: item.rawText,

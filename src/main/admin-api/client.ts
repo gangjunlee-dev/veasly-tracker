@@ -29,6 +29,9 @@ export interface AdminOrderItem {
     vendor?: { text: string };
     trackingNumber?: string;
   }>;
+  // 운영자가 admin.veasly.com에서 구매 증빙으로 입력한 마이페이지 URL.
+  // 실제 응답 키 이름은 환경별로 다를 수 있어 pickPurchaseUrl()에서 fallback 처리.
+  purchaseUrl?: string | null;
 }
 
 export interface AdminOrderListEntry {

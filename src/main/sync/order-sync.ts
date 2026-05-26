@@ -13,8 +13,39 @@ import type {
   AdminOrderListEntry,
 } from "../admin-api/client";
 import log from "electron-log";
+import { extractOrderRef } from "../services/order-ref";
 
 const logger = log.scope("order-sync");
+
+/**
+ * admin API의 구매 증빙 URL은 item.purchaseHistory[0].url에 들어온다 (실제 응답으로 확인).
+ * 환경/버전 차이를 위한 top-level fallback도 함께 시도.
+ */
+function pickPurchaseUrl(item: AdminOrderItem | Record<string, unknown>): string | null {
+  const raw = item as Record<string, unknown>;
+
+  // 1순위: purchaseHistory 배열의 첫 항목 url (admin 실제 응답 위치)
+  const ph = raw.purchaseHistory;
+  if (Array.isArray(ph) && ph.length > 0) {
+    const first = ph[0] as Record<string, unknown> | undefined;
+    const url = first?.url;
+    if (typeof url === "string" && url.trim()) return url.trim();
+  }
+
+  // 2순위: top-level 키 (응답 포맷 변형에 대비)
+  const candidates = [
+    "purchaseUrl",
+    "purchase_url",
+    "purchaseProofUrl",
+    "proofUrl",
+    "evidenceUrl",
+  ];
+  for (const key of candidates) {
+    const v = raw[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
 
 export interface SyncResult {
   fetched: number;
@@ -105,8 +136,9 @@ export class OrderSync {
     const upsertItem = this.db.prepare(`
       INSERT INTO admin_order_items
         (admin_order_id, order_item_id, vy_code, product_name, product_id, item_status,
-         domestic_tracking_number, domestic_carrier, intl_tracking_number, intl_carrier)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         domestic_tracking_number, domestic_carrier, intl_tracking_number, intl_carrier,
+         purchase_url, source_order_ref)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(admin_order_id, order_item_id) DO UPDATE SET
         vy_code = COALESCE(NULLIF(excluded.vy_code, ''), admin_order_items.vy_code),
         product_name = COALESCE(excluded.product_name, admin_order_items.product_name),
@@ -115,6 +147,8 @@ export class OrderSync {
         domestic_carrier = COALESCE(excluded.domestic_carrier, admin_order_items.domestic_carrier),
         intl_tracking_number = COALESCE(excluded.intl_tracking_number, admin_order_items.intl_tracking_number),
         intl_carrier = COALESCE(excluded.intl_carrier, admin_order_items.intl_carrier),
+        purchase_url = COALESCE(excluded.purchase_url, admin_order_items.purchase_url),
+        source_order_ref = COALESCE(excluded.source_order_ref, admin_order_items.source_order_ref),
         updated_at = datetime('now')
     `);
 
@@ -180,6 +214,10 @@ export class OrderSync {
         for (const item of items) {
           const domestic = extractShippingInfo(item, true);
           const intl = extractShippingInfo(item, false);
+          const purchaseUrl = pickPurchaseUrl(item);
+          const sourceOrderRef = purchaseUrl
+            ? extractOrderRef(purchaseUrl)?.ref ?? null
+            : null;
 
           upsertItem.run(
             adminOrderId,
@@ -191,7 +229,9 @@ export class OrderSync {
             domestic?.trackingNumber ?? null,
             domestic?.vendor ?? null,
             intl?.trackingNumber ?? null,
-            intl?.vendor ?? null
+            intl?.vendor ?? null,
+            purchaseUrl,
+            sourceOrderRef
           );
         }
       } catch (err) {

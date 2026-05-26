@@ -49,7 +49,9 @@ const api = {
     autoMatch: (input?: WarehouseAutoMatchInput) =>
       ipcRenderer.invoke("warehouse:autoMatch", input ?? {}),
     findOrdersByTracking: (input: WarehouseScanInboundInput) =>
-      ipcRenderer.invoke("warehouse:findOrdersByTracking", input)
+      ipcRenderer.invoke("warehouse:findOrdersByTracking", input),
+    deleteInboundScan: (input: { scanId: number }) =>
+      ipcRenderer.invoke("warehouse:deleteInboundScan", input)
   },
   logs: {
     list: (input?: ListExtractionLogsInput) =>

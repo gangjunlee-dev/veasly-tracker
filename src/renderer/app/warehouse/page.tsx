@@ -9,6 +9,7 @@ import {
   PackageSearch,
   RefreshCw,
   Scan,
+  Trash2,
   Wand2
 } from "lucide-react";
 import { toast } from "sonner";
@@ -67,6 +68,21 @@ type AutoMatchResult = {
     matchedOrders: MatchedOrder[];
   }>;
   unmatchedScans: InboundScan[];
+  pairing?: {
+    paired: number;
+    noMatch: number;
+    ambiguous: number;
+    malformedUrl: number;
+    pairedItemIds: number[];
+  };
+  adminPush?: {
+    attempted: number;
+    synced: number;
+    failed: number;
+    skipped: number;
+    noToken: boolean;
+    errors: Array<{ orderItemId: number; vyCode: string; error: string }>;
+  };
 };
 
 type ScanResult = {
@@ -196,6 +212,30 @@ export default function WarehousePage() {
         );
       }
 
+      const paired = result.pairing?.paired ?? 0;
+      const ambiguous = result.pairing?.ambiguous ?? 0;
+      const synced = result.adminPush?.synced ?? 0;
+      const failed = result.adminPush?.failed ?? 0;
+      const noToken = result.adminPush?.noToken ?? false;
+
+      if (paired > 0) {
+        toast.success(`URL 페어링: 주문 ${paired}건에 송장이 자동 연결됐습니다.`);
+      }
+      if (ambiguous > 0) {
+        toast.warning(
+          `URL 페어링 모호: ${ambiguous}건은 송장 후보가 2개 이상이라 수동 확인 필요.`
+        );
+      }
+      if (noToken && paired > 0) {
+        toast.error(
+          "Admin 토큰이 없어 서버 동기화를 건너뛰었습니다. 설정에서 로그인 후 다시 시도하세요."
+        );
+      } else if (failed > 0) {
+        toast.error(`Admin 서버 동기화 실패 ${failed}건. 감사 로그에서 확인하세요.`);
+      } else if (synced > 0) {
+        toast.success(`Admin 서버 동기화 ${synced}건 완료.`);
+      }
+
       await loadScans();
     } catch (error) {
       console.error(error);
@@ -205,6 +245,24 @@ export default function WarehousePage() {
     } finally {
       setIsMatching(false);
       setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  };
+
+  const handleDeleteScan = async (scanId: number, masked: string) => {
+    const ok = window.confirm(
+      `송장 ${masked}을 목록에서 삭제할까요?\n(잘못 스캔한 경우에만 사용하세요)`
+    );
+    if (!ok) return;
+
+    try {
+      await window.api.warehouse.deleteInboundScan({ scanId });
+      toast.success("송장을 목록에서 삭제했습니다.");
+      await loadScans();
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        error instanceof Error ? error.message : "삭제에 실패했습니다."
+      );
     }
   };
 
@@ -550,6 +608,7 @@ export default function WarehousePage() {
                     <th className="px-6 py-3 text-left font-semibold">최초 스캔</th>
                     <th className="px-6 py-3 text-left font-semibold">최근 스캔</th>
                     <th className="px-6 py-3 text-left font-semibold">매칭 시각</th>
+                    <th className="px-6 py-3 text-right font-semibold">작업</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -580,6 +639,22 @@ export default function WarehousePage() {
                       </td>
                       <td className="px-6 py-3 text-foreground-muted">
                         {formatDateTime(scan.matchedAt)}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleDeleteScan(
+                              scan.id,
+                              maskTracking(scan.normalizedTrackingNumber)
+                            )
+                          }
+                          className="rounded p-1.5 text-foreground-muted transition hover:bg-red-50 hover:text-red-600"
+                          title="잘못 스캔한 송장 삭제"
+                          aria-label="삭제"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       </td>
                     </tr>
                   ))}

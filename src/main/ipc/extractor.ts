@@ -185,9 +185,10 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
       shipping_status,
       tracking_number,
       normalized_tracking_number,
-      raw_data
+      raw_data,
+      source_order_ref
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(site_id, order_number)
     DO UPDATE SET
       order_date = excluded.order_date,
@@ -201,6 +202,7 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
       tracking_number = excluded.tracking_number,
       normalized_tracking_number = excluded.normalized_tracking_number,
       raw_data = excluded.raw_data,
+      source_order_ref = COALESCE(excluded.source_order_ref, orders.source_order_ref),
       updated_at = datetime('now')
     `
   );
@@ -244,7 +246,8 @@ function upsertOrders(siteId: number, orders: StandardOrder[]) {
         dbNullableTextForOrder(order.shippingStatus),
         trackingNumberForDb,
         normalizedTrackingForDb,
-        rawDataForDb
+        rawDataForDb,
+        dbNullableTextForOrder(order.sourceOrderRef)
       );
 
       if (existing) {

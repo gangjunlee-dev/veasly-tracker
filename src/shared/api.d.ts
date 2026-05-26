@@ -296,6 +296,21 @@ export type WarehouseAutoMatchResult = {
     matchedOrders: WarehouseMatchedOrder[];
   }>;
   unmatchedScans: WarehouseInboundScan[];
+  pairing: {
+    paired: number;
+    noMatch: number;
+    ambiguous: number;
+    malformedUrl: number;
+    pairedItemIds: number[];
+  };
+  adminPush: {
+    attempted: number;
+    synced: number;
+    failed: number;
+    skipped: number;
+    noToken: boolean;
+    errors: Array<{ orderItemId: number; vyCode: string; error: string }>;
+  };
 };
 
 export type WarehouseFindOrdersByTrackingResult = {
@@ -496,6 +511,9 @@ declare global {
         findOrdersByTracking: (
           input: WarehouseScanInboundInput
         ) => Promise<WarehouseFindOrdersByTrackingResult>;
+        deleteInboundScan: (input: {
+          scanId: number;
+        }) => Promise<{ ok: boolean; deleted: number }>;
       };
       logs: {
         list: (

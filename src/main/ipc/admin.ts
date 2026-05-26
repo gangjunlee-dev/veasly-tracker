@@ -13,6 +13,7 @@ import { loginToAdmin } from "../admin-api/auth";
 import { AdminApiClient } from "../admin-api/client";
 import { OrderSync } from "../sync/order-sync";
 import { pushToOps } from "../sync/ops-push";
+import { auditLog } from "../services/audit";
 import log from "electron-log";
 
 const logger = log.scope("ipc-admin");
@@ -767,34 +768,6 @@ function mapAuditEntry(row: any) {
     retryCount: row.retry_count,
     createdAt: row.created_at,
   };
-}
-
-/** 감사 로그 기록 헬퍼 */
-function auditLog(
-  db: ReturnType<typeof getDb>,
-  eventType: string,
-  trackingNumber: string,
-  row?: any,
-  extra?: { adminSynced?: number; adminError?: string }
-): void {
-  try {
-    db.prepare(
-      `INSERT INTO match_audit_log
-        (event_type, tracking_number, order_item_id, vy_code, order_number, product_name, admin_synced, admin_error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      eventType,
-      trackingNumber,
-      row?.order_item_id ?? row?.orderItemId ?? null,
-      row?.vy_code ?? row?.vyCode ?? null,
-      row?.order_number ?? row?.orderNumber ?? null,
-      row?.product_name ?? row?.productName ?? null,
-      extra?.adminSynced ?? 0,
-      extra?.adminError ?? null
-    );
-  } catch {
-    // 감사 로그 실패는 치명적이지 않음 — 무시
-  }
 }
 
 function mapMatchedItem(row: any) {

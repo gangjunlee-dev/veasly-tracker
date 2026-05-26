@@ -437,6 +437,8 @@ export class BunjangExtractor extends BaseExtractor {
           invoiceNumber: invoiceNo,
           invoiceUrl: null,
           shippingStatus: deriveShippingStatus(item, delivery),
+          // 셀러 API의 order.id가 구매자 URL의 purchases/{id}와 동일 (= 카드 승인 번호).
+          sourceOrderRef: String(order.id),
           rawData: JSON.stringify({
             source: "bunjang",
             orderId: order.id,
