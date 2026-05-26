@@ -503,4 +503,149 @@ export function registerWarehouseIpc() {
 
     return { ok: true, deleted: result.changes };
   });
+
+  // 통합 입고 페이지 좌측 데이터: 오늘(KST 자정 이후) 스캔된 모든 송장 +
+  // 어제 이전 미매칭 누적분. 각 송장에 매칭된 admin_order_items 정보 join.
+  ipcMain.handle("warehouse:listTodayAndPending", async () => {
+    const db = getDb();
+
+    const kstMidnightUtcIso = (() => {
+      const now = new Date();
+      const kstNow = new Date(now.getTime() + 9 * 3600 * 1000);
+      const y = kstNow.getUTCFullYear();
+      const m = kstNow.getUTCMonth();
+      const d = kstNow.getUTCDate();
+      return new Date(Date.UTC(y, m, d) - 9 * 3600 * 1000).toISOString();
+    })();
+
+    // 테이블 존재 확인 (admin 동기화 안 했을 때 안전)
+    const hasAdminTable = db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='admin_order_items' LIMIT 1"
+      )
+      .get();
+
+    if (!hasAdminTable) {
+      const scansOnly = db
+        .prepare(
+          `SELECT * FROM inbound_scans
+           WHERE scanned_at >= ? OR status = 'UNMATCHED'
+           ORDER BY scanned_at DESC, id DESC
+           LIMIT 200`
+        )
+        .all(kstMidnightUtcIso) as Record<string, unknown>[];
+
+      return {
+        entries: scansOnly.map((row) => ({
+          scan: mapInboundScanRow(row),
+          matchedItems: [] as Array<Record<string, unknown>>,
+          isToday: String(row.scanned_at) >= kstMidnightUtcIso,
+        })),
+      };
+    }
+
+    // 송장 + 매칭된 admin_order_items 평탄화 (LEFT JOIN)
+    const rows = db
+      .prepare(
+        `SELECT
+           s.id AS scan_id,
+           s.tracking_number, s.normalized_tracking_number, s.carrier, s.raw_input,
+           s.status AS scan_status, s.matched_order_count, s.scan_count,
+           s.scanned_at, s.last_scanned_at, s.matched_at AS scan_matched_at,
+           s.note, s.created_at AS scan_created_at, s.updated_at AS scan_updated_at,
+           aoi.order_item_id, aoi.vy_code, aoi.product_name, aoi.item_status,
+           aoi.warehouse_status AS aoi_warehouse_status,
+           aoi.warehouse_matched_at, aoi.domestic_tracking_number, aoi.domestic_carrier,
+           ao.order_number, ao.customer_name, ao.order_status
+         FROM inbound_scans s
+         LEFT JOIN admin_order_items aoi
+           ON aoi.domestic_tracking_number = s.normalized_tracking_number
+           OR aoi.domestic_tracking_number = s.tracking_number
+         LEFT JOIN admin_orders ao ON ao.id = aoi.admin_order_id
+         WHERE s.scanned_at >= ? OR s.status = 'UNMATCHED'
+         ORDER BY s.scanned_at DESC, s.id DESC`
+      )
+      .all(kstMidnightUtcIso) as Record<string, unknown>[];
+
+    type Entry = {
+      scan: ReturnType<typeof mapInboundScanRow>;
+      matchedItems: Array<{
+        orderItemId: number;
+        vyCode: string;
+        productName: string;
+        itemStatus: string;
+        warehouseStatus: string;
+        warehouseMatchedAt: string | null;
+        domesticTrackingNumber: string | null;
+        domesticCarrier: string | null;
+        orderNumber: string;
+        customerName: string | null;
+        orderStatus: string;
+      }>;
+      isToday: boolean;
+    };
+
+    const groups = new Map<number, Entry>();
+    for (const row of rows) {
+      const scanId = Number(row.scan_id);
+      let entry = groups.get(scanId);
+      if (!entry) {
+        // mapInboundScanRow가 기대하는 키 형태로 정규화
+        const scanRow: Record<string, unknown> = {
+          id: row.scan_id,
+          tracking_number: row.tracking_number,
+          normalized_tracking_number: row.normalized_tracking_number,
+          carrier: row.carrier,
+          raw_input: row.raw_input,
+          status: row.scan_status,
+          matched_order_count: row.matched_order_count,
+          scan_count: row.scan_count,
+          scanned_at: row.scanned_at,
+          last_scanned_at: row.last_scanned_at,
+          matched_at: row.scan_matched_at,
+          note: row.note,
+          created_at: row.scan_created_at,
+          updated_at: row.scan_updated_at,
+        };
+        entry = {
+          scan: mapInboundScanRow(scanRow),
+          matchedItems: [],
+          isToday: String(row.scanned_at) >= kstMidnightUtcIso,
+        };
+        groups.set(scanId, entry);
+      }
+
+      if (row.order_item_id != null) {
+        entry.matchedItems.push({
+          orderItemId: Number(row.order_item_id),
+          vyCode: row.vy_code ? String(row.vy_code) : "",
+          productName: row.product_name ? String(row.product_name) : "",
+          itemStatus: row.item_status ? String(row.item_status) : "",
+          warehouseStatus: row.aoi_warehouse_status
+            ? String(row.aoi_warehouse_status)
+            : "PENDING",
+          warehouseMatchedAt: row.warehouse_matched_at
+            ? String(row.warehouse_matched_at)
+            : null,
+          domesticTrackingNumber: row.domestic_tracking_number
+            ? String(row.domestic_tracking_number)
+            : null,
+          domesticCarrier: row.domestic_carrier ? String(row.domestic_carrier) : null,
+          orderNumber: row.order_number ? String(row.order_number) : "",
+          customerName: row.customer_name ? String(row.customer_name) : null,
+          orderStatus: row.order_status ? String(row.order_status) : "",
+        });
+      }
+    }
+
+    // 정책: "오늘 매칭 완료된 건만" + "오늘 미매칭" + "이전 미매칭 누적"
+    // → 어제 이전 매칭 완료된 송장(잘 들어가 있던 것)은 제외
+    const entries = Array.from(groups.values()).filter((e) => {
+      if (e.isToday) return true;
+      // 어제 이전이면 미매칭일 때만 포함
+      return e.scan.status === "UNMATCHED";
+    });
+
+    return { entries: entries.slice(0, 300) };
+  });
 }

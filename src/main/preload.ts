@@ -51,7 +51,9 @@ const api = {
     findOrdersByTracking: (input: WarehouseScanInboundInput) =>
       ipcRenderer.invoke("warehouse:findOrdersByTracking", input),
     deleteInboundScan: (input: { scanId: number }) =>
-      ipcRenderer.invoke("warehouse:deleteInboundScan", input)
+      ipcRenderer.invoke("warehouse:deleteInboundScan", input),
+    listTodayAndPending: () =>
+      ipcRenderer.invoke("warehouse:listTodayAndPending")
   },
   logs: {
     list: (input?: ListExtractionLogsInput) =>
@@ -86,6 +88,9 @@ const api = {
       trackingNumber: string;
       vyCode: string;
     }) => ipcRenderer.invoke("admin:confirmMatch", input),
+    scanAndMatch: (input: { trackingNumber: string }) =>
+      ipcRenderer.invoke("admin:scanAndMatch", input),
+    rescanUnmatched: () => ipcRenderer.invoke("admin:rescanUnmatched"),
     searchOrders: (input: { query: string }) =>
       ipcRenderer.invoke("admin:searchOrders", input),
     recentMatches: (input?: { limit?: number }) =>

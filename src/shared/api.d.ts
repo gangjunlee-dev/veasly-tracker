@@ -317,6 +317,28 @@ export type WarehouseFindOrdersByTrackingResult = {
   trackingNumber: string;
   items: WarehouseMatchedOrder[];
 };
+
+export type WarehouseTodayEntry = {
+  scan: WarehouseInboundScan;
+  matchedItems: Array<{
+    orderItemId: number;
+    vyCode: string;
+    productName: string;
+    itemStatus: string;
+    warehouseStatus: string;
+    warehouseMatchedAt: string | null;
+    domesticTrackingNumber: string | null;
+    domesticCarrier: string | null;
+    orderNumber: string;
+    customerName: string | null;
+    orderStatus: string;
+  }>;
+  isToday: boolean;
+};
+
+export type WarehouseListTodayAndPendingResult = {
+  entries: WarehouseTodayEntry[];
+};
 export type AdminStatus = {
   hasCredentials: boolean;
   username: string | null;
@@ -379,6 +401,44 @@ export type AdminConfirmMatchResult = {
   ok: boolean;
   synced: boolean;
   reason?: string;
+};
+
+export type AdminScanAndMatchOutcome =
+  | "AUTO_CONFIRMED"
+  | "PARTIAL"
+  | "MULTI_CANDIDATE"
+  | "UNMATCHED";
+
+export type AdminScanAndMatchScan = {
+  id: number;
+  trackingNumber: string;
+  normalizedTrackingNumber: string;
+  carrier: string | null;
+  status: string;
+  matchedOrderCount: number;
+  scanCount: number;
+  scannedAt: string;
+  lastScannedAt: string | null;
+  matchedAt: string | null;
+};
+
+export type AdminScanAndMatchResult = {
+  scan: AdminScanAndMatchScan;
+  outcome: AdminScanAndMatchOutcome;
+  confirmedItem?: AdminMatchedItem;
+  candidates?: AdminMatchedItem[];
+  adminSynced?: boolean;
+  pushReason?: string;
+};
+
+export type AdminRescanUnmatchedResult = {
+  processed: number;
+  autoConfirmed: number;
+  stillUnmatched: number;
+  candidatesFound: number;
+  adminSynced: number;
+  adminFailed: number;
+  noToken: boolean;
 };
 
 export type AdminAuditEntry = {
@@ -486,6 +546,10 @@ declare global {
           trackingNumber: string;
           vyCode: string;
         }) => Promise<AdminConfirmMatchResult>;
+        scanAndMatch: (input: {
+          trackingNumber: string;
+        }) => Promise<AdminScanAndMatchResult>;
+        rescanUnmatched: () => Promise<AdminRescanUnmatchedResult>;
         searchOrders: (input: {
           query: string;
         }) => Promise<{ results: AdminMatchedItem[] }>;
@@ -514,6 +578,7 @@ declare global {
         deleteInboundScan: (input: {
           scanId: number;
         }) => Promise<{ ok: boolean; deleted: number }>;
+        listTodayAndPending: () => Promise<WarehouseListTodayAndPendingResult>;
       };
       logs: {
         list: (

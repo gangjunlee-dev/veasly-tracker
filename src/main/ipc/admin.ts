@@ -14,6 +14,7 @@ import { AdminApiClient } from "../admin-api/client";
 import { OrderSync } from "../sync/order-sync";
 import { pushToOps } from "../sync/ops-push";
 import { auditLog } from "../services/audit";
+import { normalizeTrackingNumber } from "../utils/tracking";
 import log from "electron-log";
 
 const logger = log.scope("ipc-admin");
@@ -558,6 +559,25 @@ export function registerAdminIpc(): void {
        WHERE order_item_id = ?`
     ).run(trackingNumber, orderItemId);
 
+    // 연결된 inbound_scans도 MATCHED로 표시 (좌측 목록에서 미매칭 누적분에서 제거되도록)
+    const normalized = normalizeTrackingNumber(trackingNumber);
+    if (normalized) {
+      db.prepare(
+        `UPDATE inbound_scans
+         SET status = 'MATCHED',
+             matched_order_count = MAX(matched_order_count, 1),
+             matched_at = COALESCE(matched_at, ?),
+             updated_at = ?
+         WHERE normalized_tracking_number = ?
+            OR tracking_number = ?`
+      ).run(
+        new Date().toISOString(),
+        new Date().toISOString(),
+        normalized,
+        trackingNumber
+      );
+    }
+
     // 로컬 확정 감사 로그
     const auditCtx = { order_item_id: orderItemId, vy_code: vyCode, order_number: "" };
     auditLog(db, "CONFIRM_LOCAL", trackingNumber, auditCtx);
@@ -751,6 +771,397 @@ export function registerAdminIpc(): void {
 
     logger.info(`재시도 완료: ${succeeded} 성공, ${failed} 실패 / 총 ${pending.length}건`);
     return { retried: pending.length, succeeded, failed };
+  });
+
+  // ── Phase 5: 통합 스캔+매칭+확정 (입고 & 매칭 단일 페이지용) ──
+  /**
+   * 한 번의 스캔으로:
+   *  1) inbound_scans 풀에 upsert
+   *  2) admin_order_items에 매칭 시도 (정확 → vy/order → 끝자리 partial)
+   *  3) AUTO + 단일 후보면 즉시 ARRIVED + admin push
+   *     PARTIAL / 다수 후보면 후보만 반환 (수동 선택)
+   *     실패면 UNMATCHED
+   * 단일 트랜잭션 보장은 admin API 호출(네트워크) 때문에 두 단계로 나눔:
+   *  - DB 변경(스캔 upsert + 매칭/확정)은 한 트랜잭션
+   *  - admin push는 그 후 별도 await (실패 시 audit 기록만, 로컬 ARRIVED는 유지)
+   */
+  ipcMain.handle("admin:scanAndMatch", async (_event, rawInput) => {
+    const { trackingNumber } = z
+      .object({ trackingNumber: z.string().min(1) })
+      .parse(rawInput);
+
+    const db = getDb();
+    const trimmed = trackingNumber.replace(/\s/g, "");
+    const normalized = normalizeTrackingNumber(trackingNumber);
+
+    if (!normalized) {
+      throw new Error("송장번호를 인식하지 못했습니다. 바코드를 다시 확인해주세요.");
+    }
+
+    const now = new Date().toISOString();
+
+    // ── 1단계: inbound_scans upsert (DB 트랜잭션) + 매칭 후보 조회 ──
+    type DbResult = {
+      scanId: number;
+      matchType: "AUTO" | "PARTIAL" | "NONE";
+      items: any[];
+    };
+
+    const dbStep = db.transaction((): DbResult => {
+      // upsert inbound_scans
+      const existing = db
+        .prepare("SELECT id FROM inbound_scans WHERE normalized_tracking_number = ?")
+        .get(normalized) as { id: number } | undefined;
+
+      let scanId: number;
+      if (existing) {
+        db.prepare(
+          `UPDATE inbound_scans
+           SET scan_count = scan_count + 1,
+               last_scanned_at = ?,
+               raw_input = ?,
+               updated_at = ?
+           WHERE id = ?`
+        ).run(now, trackingNumber, now, existing.id);
+        scanId = existing.id;
+      } else {
+        const ins = db
+          .prepare(
+            `INSERT INTO inbound_scans (
+               tracking_number, normalized_tracking_number, carrier, raw_input,
+               status, matched_order_count, scan_count,
+               scanned_at, last_scanned_at, note, created_at, updated_at
+             ) VALUES (?, ?, NULL, ?, 'SCANNED', 0, 1, ?, ?, NULL, ?, ?)`
+          )
+          .run(normalized, normalized, trackingNumber, now, now, now, now);
+        scanId = Number(ins.lastInsertRowid);
+      }
+
+      // 매칭 시도 (matchBarcode와 동일한 우선순위, fuzzy는 제외)
+      let matchType: "AUTO" | "PARTIAL" | "NONE" = "NONE";
+      let items: any[] = [];
+
+      // (1) 정확 매칭 (domestic_tracking_number)
+      items = db
+        .prepare(
+          `SELECT aoi.*, ao.order_number, ao.customer_name, ao.order_status
+           FROM admin_order_items aoi
+           JOIN admin_orders ao ON ao.id = aoi.admin_order_id
+           WHERE aoi.domestic_tracking_number = ?
+           ORDER BY ao.order_number DESC`
+        )
+        .all(trimmed) as any[];
+      if (items.length > 0) matchType = "AUTO";
+
+      // (2) vy_code / order_number
+      if (items.length === 0) {
+        items = db
+          .prepare(
+            `SELECT aoi.*, ao.order_number, ao.customer_name, ao.order_status
+             FROM admin_order_items aoi
+             JOIN admin_orders ao ON ao.id = aoi.admin_order_id
+             WHERE aoi.vy_code = ? OR ao.order_number = ?
+             ORDER BY ao.order_number DESC`
+          )
+          .all(trimmed, trimmed) as any[];
+        if (items.length > 0) matchType = "AUTO";
+      }
+
+      // (3) 끝자리 partial (8자 이상)
+      if (items.length === 0 && trimmed.length >= 8) {
+        items = db
+          .prepare(
+            `SELECT aoi.*, ao.order_number, ao.customer_name, ao.order_status
+             FROM admin_order_items aoi
+             JOIN admin_orders ao ON ao.id = aoi.admin_order_id
+             WHERE aoi.domestic_tracking_number LIKE ?
+               AND aoi.warehouse_status = 'PENDING'
+             ORDER BY ao.order_number DESC
+             LIMIT 10`
+          )
+          .all(`%${trimmed.slice(-8)}`) as any[];
+        if (items.length > 0) matchType = "PARTIAL";
+      }
+
+      // AUTO + 단일 후보일 때만 즉시 로컬 확정
+      if (matchType === "AUTO" && items.length === 1) {
+        const item = items[0];
+        db.prepare(
+          `UPDATE admin_order_items
+           SET warehouse_status = 'ARRIVED',
+               warehouse_matched_at = datetime('now'),
+               domestic_tracking_number = COALESCE(NULLIF(?, ''), domestic_tracking_number),
+               updated_at = datetime('now')
+           WHERE order_item_id = ?`
+        ).run(trimmed, item.order_item_id);
+
+        db.prepare(
+          `UPDATE inbound_scans
+           SET status = 'MATCHED',
+               matched_order_count = 1,
+               matched_at = ?,
+               updated_at = ?
+           WHERE id = ?`
+        ).run(now, now, scanId);
+
+        // refresh item for response (warehouse_status는 ARRIVED로 갱신된 상태)
+        item.warehouse_status = "ARRIVED";
+        item.warehouse_matched_at = now;
+      }
+
+      return { scanId, matchType, items };
+    });
+
+    const { scanId, matchType, items } = dbStep();
+
+    // 스캔 로우 조회 (응답용)
+    const scanRow = db
+      .prepare("SELECT * FROM inbound_scans WHERE id = ?")
+      .get(scanId) as Record<string, unknown>;
+
+    const scan = {
+      id: Number(scanRow.id),
+      trackingNumber: String(scanRow.tracking_number),
+      normalizedTrackingNumber: String(scanRow.normalized_tracking_number),
+      carrier: scanRow.carrier ? String(scanRow.carrier) : null,
+      status: String(scanRow.status),
+      matchedOrderCount: Number(scanRow.matched_order_count ?? 0),
+      scanCount: Number(scanRow.scan_count ?? 0),
+      scannedAt: String(scanRow.scanned_at),
+      lastScannedAt: scanRow.last_scanned_at ? String(scanRow.last_scanned_at) : null,
+      matchedAt: scanRow.matched_at ? String(scanRow.matched_at) : null,
+    };
+
+    // ── 2단계: outcome 분기 + audit + (필요시) admin push ──
+
+    // PARTIAL/MULTI/NONE은 모두 inbound_scans 상태를 UNMATCHED로 변경
+    // (좌측 목록 쿼리가 status='UNMATCHED' 누적분을 끌어오기 위함)
+    const markUnmatched = () => {
+      db.prepare(
+        `UPDATE inbound_scans
+         SET status = 'UNMATCHED',
+             matched_order_count = 0,
+             updated_at = ?
+         WHERE id = ? AND status = 'SCANNED'`
+      ).run(new Date().toISOString(), scanId);
+    };
+
+    if (matchType === "NONE" || items.length === 0) {
+      markUnmatched();
+      auditLog(db, "SCAN_MISS", trimmed);
+      return {
+        scan: { ...scan, status: "UNMATCHED" },
+        outcome: "UNMATCHED" as const,
+        candidates: [] as ReturnType<typeof mapMatchedItem>[],
+      };
+    }
+
+    if (matchType === "PARTIAL") {
+      markUnmatched();
+      auditLog(db, "SCAN_PARTIAL", trimmed, items[0]);
+      return {
+        scan: { ...scan, status: "UNMATCHED" },
+        outcome: "PARTIAL" as const,
+        candidates: items.map(mapMatchedItem),
+      };
+    }
+
+    // matchType === "AUTO"
+    if (items.length > 1) {
+      markUnmatched();
+      auditLog(db, "SCAN_AUTO", trimmed, items[0]);
+      return {
+        scan: { ...scan, status: "UNMATCHED" },
+        outcome: "MULTI_CANDIDATE" as const,
+        candidates: items.map(mapMatchedItem),
+      };
+    }
+
+    // AUTO + 단일 → 이미 로컬 ARRIVED. admin push 시도.
+    const item = items[0];
+    const auditCtx = {
+      order_item_id: item.order_item_id,
+      vy_code: item.vy_code,
+      order_number: item.order_number,
+    };
+    auditLog(db, "CONFIRM_LOCAL", trimmed, auditCtx);
+
+    let adminSynced = false;
+    let pushReason: string | undefined;
+
+    const accessToken = kvGet("admin_access_token");
+    if (!accessToken) {
+      pushReason = "토큰 없음";
+      auditLog(db, "CONFIRM_SYNC_FAILED", trimmed, auditCtx, { adminError: pushReason });
+    } else {
+      try {
+        const api = new AdminApiClient(accessToken);
+        const result = await api.registerDomesticTracking(item.vy_code, trimmed);
+        if (result.ok) {
+          adminSynced = true;
+          auditLog(db, "CONFIRM_SYNCED", trimmed, auditCtx, { adminSynced: 1 });
+        } else {
+          pushReason = result.error;
+          auditLog(db, "CONFIRM_SYNC_FAILED", trimmed, auditCtx, { adminError: result.error });
+        }
+      } catch (err) {
+        pushReason = err instanceof Error ? err.message : String(err);
+        auditLog(db, "CONFIRM_SYNC_FAILED", trimmed, auditCtx, { adminError: pushReason });
+      }
+    }
+
+    logger.info(
+      `[scanAndMatch] ${trimmed} → AUTO_CONFIRMED ${item.vy_code} (synced=${adminSynced})`
+    );
+
+    return {
+      scan,
+      outcome: "AUTO_CONFIRMED" as const,
+      confirmedItem: mapMatchedItem(item),
+      adminSynced,
+      pushReason,
+    };
+  });
+
+  /**
+   * UNMATCHED 상태로 누적된 inbound_scans 전체를 admin_order_items에 다시 매칭 시도.
+   * AUTO + 단일 후보면 자동 확정 + Admin push.
+   * PARTIAL/MULTI는 그대로 두고 candidatesFound 카운터만 증가 (운영자가 좌측에서 수동 처리).
+   */
+  ipcMain.handle("admin:rescanUnmatched", async () => {
+    const db = getDb();
+
+    const unmatched = db
+      .prepare(
+        `SELECT id, tracking_number FROM inbound_scans
+         WHERE status = 'UNMATCHED'
+         ORDER BY scanned_at ASC`
+      )
+      .all() as Array<{ id: number; tracking_number: string }>;
+
+    let autoConfirmed = 0;
+    let stillUnmatched = 0;
+    let candidatesFound = 0;
+    let adminSynced = 0;
+    let adminFailed = 0;
+
+    const accessToken = kvGet("admin_access_token");
+    const api = accessToken ? new AdminApiClient(accessToken) : null;
+
+    for (const scan of unmatched) {
+      const trimmed = scan.tracking_number.replace(/\s/g, "");
+
+      let items = db
+        .prepare(
+          `SELECT aoi.*, ao.order_number, ao.customer_name, ao.order_status
+           FROM admin_order_items aoi
+           JOIN admin_orders ao ON ao.id = aoi.admin_order_id
+           WHERE aoi.domestic_tracking_number = ?`
+        )
+        .all(trimmed) as any[];
+      let matchType: "AUTO" | "PARTIAL" | "NONE" = items.length > 0 ? "AUTO" : "NONE";
+
+      if (items.length === 0) {
+        items = db
+          .prepare(
+            `SELECT aoi.*, ao.order_number, ao.customer_name, ao.order_status
+             FROM admin_order_items aoi
+             JOIN admin_orders ao ON ao.id = aoi.admin_order_id
+             WHERE aoi.vy_code = ? OR ao.order_number = ?`
+          )
+          .all(trimmed, trimmed) as any[];
+        if (items.length > 0) matchType = "AUTO";
+      }
+
+      if (items.length === 0 && trimmed.length >= 8) {
+        items = db
+          .prepare(
+            `SELECT aoi.*, ao.order_number, ao.customer_name, ao.order_status
+             FROM admin_order_items aoi
+             JOIN admin_orders ao ON ao.id = aoi.admin_order_id
+             WHERE aoi.domestic_tracking_number LIKE ?
+               AND aoi.warehouse_status = 'PENDING'
+             LIMIT 10`
+          )
+          .all(`%${trimmed.slice(-8)}`) as any[];
+        if (items.length > 0) matchType = "PARTIAL";
+      }
+
+      if (matchType === "NONE" || items.length === 0) {
+        stillUnmatched++;
+        continue;
+      }
+
+      if (matchType === "PARTIAL" || items.length > 1) {
+        candidatesFound++;
+        continue;
+      }
+
+      // AUTO + 단일 → 즉시 확정
+      const item = items[0];
+      const now = new Date().toISOString();
+
+      db.prepare(
+        `UPDATE admin_order_items
+         SET warehouse_status = 'ARRIVED',
+             warehouse_matched_at = datetime('now'),
+             domestic_tracking_number = COALESCE(NULLIF(?, ''), domestic_tracking_number),
+             updated_at = datetime('now')
+         WHERE order_item_id = ?`
+      ).run(trimmed, item.order_item_id);
+
+      db.prepare(
+        `UPDATE inbound_scans
+         SET status = 'MATCHED',
+             matched_order_count = 1,
+             matched_at = ?,
+             updated_at = ?
+         WHERE id = ?`
+      ).run(now, now, scan.id);
+
+      autoConfirmed++;
+
+      const auditCtx = {
+        order_item_id: item.order_item_id,
+        vy_code: item.vy_code,
+        order_number: item.order_number,
+      };
+      auditLog(db, "CONFIRM_LOCAL", trimmed, auditCtx);
+
+      if (api) {
+        try {
+          const result = await api.registerDomesticTracking(item.vy_code, trimmed);
+          if (result.ok) {
+            adminSynced++;
+            auditLog(db, "CONFIRM_SYNCED", trimmed, auditCtx, { adminSynced: 1 });
+          } else {
+            adminFailed++;
+            auditLog(db, "CONFIRM_SYNC_FAILED", trimmed, auditCtx, { adminError: result.error });
+          }
+        } catch (err) {
+          adminFailed++;
+          const msg = err instanceof Error ? err.message : String(err);
+          auditLog(db, "CONFIRM_SYNC_FAILED", trimmed, auditCtx, { adminError: msg });
+        }
+      } else {
+        adminFailed++;
+        auditLog(db, "CONFIRM_SYNC_FAILED", trimmed, auditCtx, { adminError: "토큰 없음" });
+      }
+    }
+
+    logger.info(
+      `[rescanUnmatched] processed=${unmatched.length} confirmed=${autoConfirmed} candidates=${candidatesFound} stillUnmatched=${stillUnmatched}`
+    );
+
+    return {
+      processed: unmatched.length,
+      autoConfirmed,
+      stillUnmatched,
+      candidatesFound,
+      adminSynced,
+      adminFailed,
+      noToken: !accessToken,
+    };
   });
 }
 

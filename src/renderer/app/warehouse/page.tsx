@@ -4,666 +4,788 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  Clock,
   Inbox,
   Keyboard,
+  PackageCheck,
   PackageSearch,
   RefreshCw,
   Scan,
-  Trash2,
-  Wand2
+  Search,
+  Wand2,
+  X,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "../../components/AppShell";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { Input, Select } from "../../components/ui/Input";
+import { Input } from "../../components/ui/Input";
 import { KpiCard } from "../../components/ui/KpiCard";
 import { PageHeader } from "../../components/ui/PageHeader";
-import { WarehouseStatusBadge } from "../../components/ui/StatusBadge";
+import { StatusBadge } from "../../components/ui/StatusBadge";
+import { playChime } from "../../lib/chime";
+import type {
+  AdminMatchedItem,
+  AdminRescanUnmatchedResult,
+  AdminScanAndMatchResult,
+  WarehouseListTodayAndPendingResult,
+  WarehouseTodayEntry,
+} from "../../../shared/api";
 
-type InboundScan = {
-  id: number;
-  trackingNumber: string;
-  normalizedTrackingNumber: string;
-  carrier: string | null;
-  rawInput: string | null;
-  status: string;
-  matchedOrderCount: number;
-  scanCount: number;
-  scannedAt: string;
-  lastScannedAt: string | null;
-  matchedAt: string | null;
-  note: string | null;
+const STATUS_LABELS: Record<string, string> = {
+  PAYMENT_COMPLETED: "결제 완료",
+  ORDER_PROCESSING: "주문 처리중",
+  SHIPPING_TO_BDJ: "배대지 배송중",
+  SHIPPING_TO_HOME: "해외 배송중",
+  DELIVERED: "배송 완료",
+  CANCEL_REQUESTED: "취소 요청",
+  CANCEL_COMPLETED: "취소 완료",
 };
 
-type ScanListResult = {
-  items: InboundScan[];
-  total: number;
-  summary: Record<string, number>;
-};
+type ActionRow =
+  | {
+      kind: "candidates";
+      key: string;
+      trackingNumber: string;
+      candidates: AdminMatchedItem[];
+    }
+  | {
+      kind: "unmatched";
+      key: string;
+      trackingNumber: string;
+    };
 
-type MatchedOrder = {
-  id?: number;
-  siteId?: number;
-  siteName?: string;
-  siteCode?: string;
-  orderNumber: string;
-  productName: string;
-  optionName: string | null;
-  brandName?: string | null;
-  amount?: number;
-  quantity?: number;
-  carrier: string | null;
-  trackingNumber: string | null;
-};
-
-type AutoMatchResult = {
-  scannedCount: number;
-  matchedScanCount: number;
-  unmatchedScanCount: number;
-  matchedOrderCount: number;
-  matchedScans: Array<{
-    scan: InboundScan;
-    matchedOrders: MatchedOrder[];
-  }>;
-  unmatchedScans: InboundScan[];
-  pairing?: {
-    paired: number;
-    noMatch: number;
-    ambiguous: number;
-    malformedUrl: number;
-    pairedItemIds: number[];
-  };
-  adminPush?: {
-    attempted: number;
-    synced: number;
-    failed: number;
-    skipped: number;
-    noToken: boolean;
-    errors: Array<{ orderItemId: number; vyCode: string; error: string }>;
-  };
-};
-
-type ScanResult = {
-  result: string;
-  message: string;
-  scan: InboundScan | null;
-  matchedOrders: MatchedOrder[];
-};
-
-function maskTracking(value: string | null | undefined) {
-  if (!value) return "";
-  if (value.length <= 8) return value;
-  return `${value.slice(0, 4)}****${value.slice(-4)}`;
+function formatTime(value: string | null | undefined): string {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
 }
 
-function formatDateTime(value: string | null | undefined) {
+function formatDateTime(value: string | null | undefined): string {
   if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
   return new Intl.DateTimeFormat("ko-KR", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
-    minute: "2-digit"
-  }).format(date);
+    minute: "2-digit",
+  }).format(d);
+}
+
+function maskTracking(value: string | null | undefined): string {
+  if (!value) return "-";
+  if (value.length <= 8) return value;
+  return `${value.slice(0, 4)}****${value.slice(-4)}`;
 }
 
 export default function WarehousePage() {
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const scanInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [trackingNumber, setTrackingNumber] = useState("");
-  const [statusFilter, setStatusFilter] = useState("ALL");
-  const [search, setSearch] = useState("");
-  const [scans, setScans] = useState<InboundScan[]>([]);
-  const [summary, setSummary] = useState<Record<string, number>>({});
-  const [total, setTotal] = useState(0);
-  const [lastScan, setLastScan] = useState<ScanResult | null>(null);
-  const [lastAutoMatch, setLastAutoMatch] = useState<AutoMatchResult | null>(null);
-  const [isScanning, setIsScanning] = useState(false);
-  const [isMatching, setIsMatching] = useState(false);
+  const [scanValue, setScanValue] = useState("");
+  const [scanning, setScanning] = useState(false);
 
-  const loadScans = useCallback(async () => {
-    const result = (await window.api.warehouse.listInboundScans({
-      page: 1,
-      pageSize: 100,
-      status: statusFilter,
-      search: search.trim() || undefined
-    })) as ScanListResult;
+  // 좌측: DB 기반 (오늘 + 어제 이전 미매칭)
+  const [entries, setEntries] = useState<WarehouseTodayEntry[]>([]);
+  const [loadingEntries, setLoadingEntries] = useState(true);
 
-    setScans(result.items ?? []);
-    setTotal(result.total ?? 0);
-    setSummary(result.summary ?? {});
-  }, [statusFilter, search]);
+  // 우측: 세션 한정 액션 큐 (스캔 직후 후보 / 좌측 "지금 매칭" 클릭 / UNMATCHED 인라인 검색)
+  const [actionItems, setActionItems] = useState<ActionRow[]>([]);
+  const [manualSearch, setManualSearch] = useState<
+    Record<string, { query: string; results: AdminMatchedItem[]; loading: boolean }>
+  >({});
+  const [confirming, setConfirming] = useState<number | null>(null);
 
-  useEffect(() => {
-    void loadScans();
-  }, [loadScans]);
+  const [bulkRunning, setBulkRunning] = useState(false);
 
-  useEffect(() => {
-    inputRef.current?.focus();
+  // 좌측 데이터 로드
+  const loadEntries = useCallback(async () => {
+    try {
+      const r: WarehouseListTodayAndPendingResult =
+        await window.api.warehouse.listTodayAndPending();
+      setEntries(r.entries);
+    } catch (err) {
+      console.error(err);
+      toast.error(
+        `목록 조회 실패: ${err instanceof Error ? err.message : String(err)}`
+      );
+    } finally {
+      setLoadingEntries(false);
+    }
   }, []);
 
-  const stats = useMemo(
-    () => ({
-      scanned: summary.SCANNED ?? 0,
-      matched: summary.MATCHED ?? 0,
-      unmatched: summary.UNMATCHED ?? 0,
-      issue: summary.ISSUE ?? 0
-    }),
-    [summary]
+  useEffect(() => {
+    void loadEntries();
+  }, [loadEntries]);
+
+  useEffect(() => {
+    scanInputRef.current?.focus();
+  }, []);
+
+  const refocus = useCallback(() => {
+    setTimeout(() => scanInputRef.current?.focus(), 30);
+  }, []);
+
+  // 통합 스캔 핸들러
+  const handleScan = useCallback(
+    async (raw: string) => {
+      const value = raw.trim();
+      if (!value || scanning) return;
+      setScanning(true);
+
+      try {
+        const r: AdminScanAndMatchResult = await window.api.admin.scanAndMatch({
+          trackingNumber: value,
+        });
+
+        if (r.outcome === "AUTO_CONFIRMED" && r.confirmedItem) {
+          playChime("success");
+          if (r.adminSynced) {
+            toast.success(`매칭+입고+동기화 완료: ${r.confirmedItem.vyCode}`);
+          } else {
+            toast.warning(
+              `로컬 입고 완료 / Admin 동기화 보류: ${r.pushReason ?? "이유 미상"}`
+            );
+          }
+        } else if (
+          (r.outcome === "PARTIAL" || r.outcome === "MULTI_CANDIDATE") &&
+          r.candidates &&
+          r.candidates.length > 0
+        ) {
+          playChime("warn");
+          // 즉시 우측 패널에 후보 표시
+          setActionItems((prev) => [
+            {
+              kind: "candidates" as const,
+              key: `action-${r.scan.id}-${Date.now()}`,
+              trackingNumber: value,
+              candidates: r.candidates!,
+            },
+            ...prev,
+          ]);
+          toast.warning(
+            `후보 ${r.candidates.length}건 — 우측 패널에서 선택하세요`
+          );
+        } else {
+          playChime("error");
+          toast.error(`매칭 실패 — 좌측 목록에서 "지금 매칭"으로 처리하세요`);
+        }
+      } catch (err) {
+        playChime("error");
+        toast.error(`스캔 오류: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setScanValue("");
+        setScanning(false);
+        await loadEntries();
+        refocus();
+      }
+    },
+    [scanning, refocus, loadEntries]
   );
 
-  const handleScan = async () => {
-    const value = trackingNumber.trim();
-    if (!value || isScanning) {
-      inputRef.current?.focus();
-      return;
-    }
-
-    setIsScanning(true);
-    try {
-      const result = (await window.api.warehouse.scanInbound({
-        trackingNumber: value
-      })) as ScanResult;
-
-      setLastScan(result);
-      setTrackingNumber("");
-
-      if (result.result === "DUPLICATE") {
-        toast.warning(result.message);
-      } else if (result.matchedOrders.length > 0) {
-        toast.success(
-          `${maskTracking(result.scan?.normalizedTrackingNumber)} · 주문 ${result.matchedOrders.length}건 자동 매칭`
-        );
-      } else {
-        toast.success(result.message);
-      }
-
-      await loadScans();
-    } catch (error) {
-      console.error(error);
-      toast.error(
-        error instanceof Error ? error.message : "송장 저장에 실패했습니다."
+  // 좌측의 미매칭 행에서 "지금 매칭" 클릭 → 우측 액션 큐에 추가
+  const handleOpenMatch = useCallback(
+    (trackingNumber: string) => {
+      const exists = actionItems.some(
+        (a) => a.trackingNumber === trackingNumber && a.kind === "unmatched"
       );
-    } finally {
-      setIsScanning(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
-  };
-
-  const handleAutoMatch = async () => {
-    if (isMatching) return;
-    setIsMatching(true);
-    try {
-      const result = (await window.api.warehouse.autoMatch()) as AutoMatchResult;
-      setLastAutoMatch(result);
-
-      if (result.scannedCount === 0) {
-        toast.info("매칭 시도할 송장이 없습니다.");
-      } else if (result.matchedScanCount > 0) {
-        toast.success(
-          `자동 매칭 완료 · 송장 ${result.matchedScanCount}건 매칭 / 주문 ${result.matchedOrderCount}건 입고`
-        );
-      } else {
-        toast.warning(
-          `송장 ${result.unmatchedScanCount}건이 아직 미매칭입니다. 주문을 가져온 뒤 다시 시도해 주세요.`
-        );
+      if (exists) {
+        toast.info("이미 우측 패널에 있습니다.");
+        return;
       }
+      setActionItems((prev) => [
+        {
+          kind: "unmatched" as const,
+          key: `action-manual-${trackingNumber}-${Date.now()}`,
+          trackingNumber,
+        },
+        ...prev,
+      ]);
+    },
+    [actionItems]
+  );
 
-      const paired = result.pairing?.paired ?? 0;
-      const ambiguous = result.pairing?.ambiguous ?? 0;
-      const synced = result.adminPush?.synced ?? 0;
-      const failed = result.adminPush?.failed ?? 0;
-      const noToken = result.adminPush?.noToken ?? false;
+  // 후보/검색결과 → confirmMatch
+  const handleConfirmCandidate = useCallback(
+    async (actionKey: string, trackingNumber: string, item: AdminMatchedItem) => {
+      setConfirming(item.orderItemId);
+      try {
+        const r = await window.api.admin.confirmMatch({
+          orderItemId: item.orderItemId,
+          trackingNumber,
+          vyCode: item.vyCode,
+        });
 
-      if (paired > 0) {
-        toast.success(`URL 페어링: 주문 ${paired}건에 송장이 자동 연결됐습니다.`);
-      }
-      if (ambiguous > 0) {
-        toast.warning(
-          `URL 페어링 모호: ${ambiguous}건은 송장 후보가 2개 이상이라 수동 확인 필요.`
-        );
-      }
-      if (noToken && paired > 0) {
+        if (!r.ok) {
+          toast.error("확정 실패");
+          return;
+        }
+
+        playChime("success");
+        setActionItems((prev) => prev.filter((a) => a.key !== actionKey));
+        if (r.synced) {
+          toast.success(`매칭 확정 + 동기화 완료: ${item.vyCode}`);
+        } else {
+          toast.warning(
+            `로컬 확정 / Admin 동기화 보류: ${r.reason ?? "이유 미상"}`
+          );
+        }
+        await loadEntries();
+      } catch (err) {
         toast.error(
-          "Admin 토큰이 없어 서버 동기화를 건너뛰었습니다. 설정에서 로그인 후 다시 시도하세요."
+          `확정 오류: ${err instanceof Error ? err.message : String(err)}`
         );
-      } else if (failed > 0) {
-        toast.error(`Admin 서버 동기화 실패 ${failed}건. 감사 로그에서 확인하세요.`);
-      } else if (synced > 0) {
-        toast.success(`Admin 서버 동기화 ${synced}건 완료.`);
+      } finally {
+        setConfirming(null);
+        refocus();
       }
+    },
+    [refocus, loadEntries]
+  );
 
-      await loadScans();
-    } catch (error) {
-      console.error(error);
+  const runManualSearch = useCallback(async (actionKey: string, query: string) => {
+    const q = query.trim();
+    if (!q) return;
+    setManualSearch((m) => ({
+      ...m,
+      [actionKey]: { query: q, results: [], loading: true },
+    }));
+    try {
+      const { results } = await window.api.admin.searchOrders({ query: q });
+      setManualSearch((m) => ({
+        ...m,
+        [actionKey]: { query: q, results, loading: false },
+      }));
+      if (results.length === 0) toast.warning("검색 결과 없음");
+    } catch (err) {
+      setManualSearch((m) => ({
+        ...m,
+        [actionKey]: { query: q, results: [], loading: false },
+      }));
       toast.error(
-        error instanceof Error ? error.message : "자동 매칭에 실패했습니다."
+        `검색 오류: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }, []);
+
+  const dismissAction = useCallback((actionKey: string) => {
+    setActionItems((prev) => prev.filter((a) => a.key !== actionKey));
+    setManualSearch((m) => {
+      const next = { ...m };
+      delete next[actionKey];
+      return next;
+    });
+  }, []);
+
+  // 누락분 재처리 (admin 기반 일괄 재매칭)
+  const handleBulkRescan = useCallback(async () => {
+    if (bulkRunning) return;
+    setBulkRunning(true);
+    try {
+      const r: AdminRescanUnmatchedResult =
+        await window.api.admin.rescanUnmatched();
+
+      if (r.processed === 0) {
+        toast.info("재매칭할 미매칭 송장이 없습니다.");
+      } else {
+        toast.success(
+          `재매칭 완료 · 처리 ${r.processed} · 자동확정 ${r.autoConfirmed} · 후보발견 ${r.candidatesFound} · 여전히 미매칭 ${r.stillUnmatched}`
+        );
+      }
+      if (r.noToken && r.autoConfirmed > 0) {
+        toast.error("Admin 토큰 없음 — 동기화 건너뜀. 설정에서 로그인 필요.");
+      } else if (r.adminFailed > 0) {
+        toast.error(`Admin 동기화 실패 ${r.adminFailed}건 — 감사 로그 확인`);
+      }
+      await loadEntries();
+    } catch (err) {
+      toast.error(
+        `재매칭 오류: ${err instanceof Error ? err.message : String(err)}`
       );
     } finally {
-      setIsMatching(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setBulkRunning(false);
+      refocus();
     }
-  };
+  }, [bulkRunning, refocus, loadEntries]);
 
-  const handleDeleteScan = async (scanId: number, masked: string) => {
-    const ok = window.confirm(
-      `송장 ${masked}을 목록에서 삭제할까요?\n(잘못 스캔한 경우에만 사용하세요)`
-    );
-    if (!ok) return;
-
-    try {
-      await window.api.warehouse.deleteInboundScan({ scanId });
-      toast.success("송장을 목록에서 삭제했습니다.");
-      await loadScans();
-    } catch (error) {
-      console.error(error);
-      toast.error(
-        error instanceof Error ? error.message : "삭제에 실패했습니다."
-      );
+  // KPI는 entries 기반 계산
+  const stats = useMemo(() => {
+    let todayMatched = 0;
+    let todayUnmatched = 0;
+    let oldUnmatched = 0;
+    for (const e of entries) {
+      if (e.isToday) {
+        if (e.scan.status === "MATCHED") todayMatched++;
+        else if (e.scan.status === "UNMATCHED") todayUnmatched++;
+      } else if (e.scan.status === "UNMATCHED") {
+        oldUnmatched++;
+      }
     }
-  };
+    return {
+      todayMatched,
+      todayUnmatched,
+      oldUnmatched,
+      actionPending: actionItems.length,
+    };
+  }, [entries, actionItems]);
+
+  const lastScanDisplay = useMemo(() => {
+    if (entries.length === 0) return null;
+    return maskTracking(entries[0].scan.normalizedTrackingNumber);
+  }, [entries]);
 
   return (
     <AppShell>
       <PageHeader
-        eyebrow="입고"
-        title="송장 스캔으로 입고 처리"
-        description="바코드 리더기로 도착한 택배 송장을 스캔하면 자동으로 주문과 매칭됩니다. 주문 데이터가 아직 없어도 송장은 먼저 저장됩니다."
+        eyebrow="입고 & 매칭"
+        title="송장 스캔 → 매칭 → 동기화"
+        description="바코드를 스캔하면 admin 주문과 즉시 매칭됩니다. 미매칭 송장은 좌측에 누적되어 나중에 주문 데이터가 들어오면 다시 매칭할 수 있습니다."
         actions={
-          <Button
-            variant="primary"
-            onClick={handleAutoMatch}
-            loading={isMatching}
-            disabled={isMatching}
-          >
-            <Wand2 className="h-4 w-4" />
-            전체 자동 매칭
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={loadEntries} disabled={loadingEntries}>
+              <RefreshCw className="h-4 w-4" />
+              새로고침
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={handleBulkRescan}
+              loading={bulkRunning}
+              disabled={bulkRunning}
+            >
+              <Wand2 className="h-4 w-4" />
+              누락분 재처리
+            </Button>
+          </div>
         }
       />
 
-      <div className="mt-8 space-y-6">
-        <section className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
-          <Card className="overflow-hidden">
-            <div className="border-b border-border bg-gradient-to-br from-primary-soft via-surface to-surface px-6 py-5">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary-soft-foreground">
-                <Scan className="h-4 w-4" />
-                바코드 스캔 입력
-              </div>
-              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-stretch">
-                <Input
-                  ref={inputRef}
-                  value={trackingNumber}
-                  onChange={(event) => setTrackingNumber(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void handleScan();
-                    }
-                  }}
-                  placeholder="여기를 클릭한 뒤 바코드를 스캔하세요"
-                  className="h-14 font-mono text-xl font-bold tracking-wider"
-                  autoFocus
-                />
-                <Button
-                  variant="primary"
-                  className="h-14 px-6 text-base"
-                  onClick={() => void handleScan()}
-                  loading={isScanning}
-                  disabled={isScanning || !trackingNumber.trim()}
-                >
-                  <Scan className="h-5 w-5" />
-                  저장
-                </Button>
-              </div>
-              <p className="mt-3 flex items-center gap-1.5 text-xs text-foreground-muted">
-                <Keyboard className="h-3.5 w-3.5" />
-                USB 바코드 리더기는 키보드처럼 동작합니다. 스캔 후 자동으로 Enter가 입력됩니다.
-              </p>
+      {/* KPI */}
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          label="오늘 매칭 완료"
+          value={stats.todayMatched.toLocaleString("ko-KR")}
+          hint="자동 + 수동 확정"
+          icon={CheckCircle2}
+          tone="success"
+        />
+        <KpiCard
+          label="오늘 미매칭"
+          value={stats.todayUnmatched.toLocaleString("ko-KR")}
+          hint="처리 필요"
+          icon={AlertTriangle}
+          tone={stats.todayUnmatched > 0 ? "warning" : "default"}
+        />
+        <KpiCard
+          label="이전 누적 미매칭"
+          value={stats.oldUnmatched.toLocaleString("ko-KR")}
+          hint="주문 동기화 후 재매칭 가능"
+          icon={Inbox}
+          tone={stats.oldUnmatched > 0 ? "warning" : "default"}
+        />
+        <KpiCard
+          label="우측 처리 대기"
+          value={stats.actionPending.toLocaleString("ko-KR")}
+          hint="후보 선택 / 수동 검색"
+          icon={XCircle}
+          tone={stats.actionPending > 0 ? "warning" : "default"}
+        />
+      </div>
+
+      {/* 스캔 입력 (sticky) */}
+      <div className="sticky top-0 z-10 mt-6 -mx-6 bg-background/95 px-6 py-3 backdrop-blur lg:-mx-10 lg:px-10">
+        <Card className="overflow-hidden">
+          <div className="border-b border-border bg-gradient-to-br from-primary-soft via-surface to-surface px-6 py-4">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-primary-soft-foreground">
+              <Scan className="h-4 w-4" />
+              바코드 스캔 입력
             </div>
-
-            <div className="px-6 py-5">
-              {lastScan?.scan ? (
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-foreground-muted">
-                        마지막 스캔
-                      </p>
-                      <p className="mt-1 font-mono text-2xl font-bold tracking-wide text-foreground">
-                        {maskTracking(lastScan.scan.normalizedTrackingNumber)}
-                      </p>
-                    </div>
-                    <WarehouseStatusBadge status={lastScan.scan.status} />
-                  </div>
-                  <p className="text-sm text-foreground-muted">{lastScan.message}</p>
-
-                  {lastScan.matchedOrders.length > 0 && (
-                    <div className="rounded-xl border border-success/20 bg-success-soft px-4 py-3">
-                      <p className="text-xs font-semibold text-success-soft-foreground">
-                        매칭된 주문 {lastScan.matchedOrders.length}건
-                      </p>
-                      <ul className="mt-2 space-y-1 text-sm text-success-soft-foreground">
-                        {lastScan.matchedOrders.slice(0, 3).map((order) => (
-                          <li key={order.orderNumber} className="truncate">
-                            · {order.productName}{" "}
-                            {order.optionName ? `(${order.optionName})` : ""}
-                          </li>
-                        ))}
-                        {lastScan.matchedOrders.length > 3 && (
-                          <li className="text-xs opacity-75">
-                            외 {lastScan.matchedOrders.length - 3}건
-                          </li>
-                        )}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <EmptyState
-                  icon={PackageSearch}
-                  title="스캔 결과가 여기에 표시됩니다"
-                  description="입력창에 포커스를 둔 상태로 바코드를 스캔해 보세요."
-                />
-              )}
-            </div>
-          </Card>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <KpiCard
-              label="스캔 대기"
-              value={stats.scanned.toLocaleString("ko-KR")}
-              hint="아직 매칭 시도 안 한 송장"
-              icon={Inbox}
-              tone="info"
-            />
-            <KpiCard
-              label="매칭 완료"
-              value={stats.matched.toLocaleString("ko-KR")}
-              hint="주문과 자동 매칭된 송장"
-              icon={CheckCircle2}
-              tone="success"
-            />
-            <KpiCard
-              label="미매칭"
-              value={stats.unmatched.toLocaleString("ko-KR")}
-              hint="주문 데이터를 가져온 뒤 다시 매칭"
-              icon={AlertTriangle}
-              tone={stats.unmatched > 0 ? "warning" : "default"}
-            />
-            <KpiCard
-              label="전체 송장"
-              value={total.toLocaleString("ko-KR")}
-              hint={`이슈 ${stats.issue}건`}
-              icon={Scan}
-              tone="default"
-            />
-          </div>
-        </section>
-
-        {lastAutoMatch && (
-          <Card>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
-              <div>
-                <h2 className="text-base font-semibold text-foreground">
-                  최근 자동 매칭 결과
-                </h2>
-                <p className="mt-0.5 text-sm text-foreground-muted">
-                  매칭된 송장과 어떤 상품에 연결되었는지 보여줍니다.
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-foreground-muted">
-                <span>
-                  대상 <span className="font-semibold text-foreground">
-                    {lastAutoMatch.scannedCount}
-                  </span>
-                </span>
-                <span className="text-foreground-subtle">·</span>
-                <span>
-                  매칭{" "}
-                  <span className="font-semibold text-success-soft-foreground">
-                    {lastAutoMatch.matchedScanCount}
-                  </span>
-                </span>
-                <span className="text-foreground-subtle">·</span>
-                <span>
-                  미매칭{" "}
-                  <span className="font-semibold text-warning-soft-foreground">
-                    {lastAutoMatch.unmatchedScanCount}
-                  </span>
-                </span>
-                <span className="text-foreground-subtle">·</span>
-                <span>
-                  주문{" "}
-                  <span className="font-semibold text-foreground">
-                    {lastAutoMatch.matchedOrderCount}건 입고
-                  </span>
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setLastAutoMatch(null)}
-                >
-                  지우기
-                </Button>
-              </div>
-            </div>
-
-            {lastAutoMatch.matchedScans.length === 0 &&
-            lastAutoMatch.unmatchedScans.length === 0 ? (
-              <div className="p-6">
-                <EmptyState
-                  icon={Wand2}
-                  title="이번 실행에서 처리한 송장이 없습니다"
-                  description="스캔 풀이 비어 있거나 모든 송장이 이미 매칭되어 있습니다."
-                />
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {lastAutoMatch.matchedScans.map(({ scan, matchedOrders }) => (
-                  <div
-                    key={`matched-${scan.id}`}
-                    className="grid gap-3 px-6 py-4 lg:grid-cols-[280px_1fr]"
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <WarehouseStatusBadge status="MATCHED" />
-                        <span className="font-mono text-sm font-semibold text-foreground">
-                          {maskTracking(scan.normalizedTrackingNumber)}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs text-foreground-muted">
-                        {scan.carrier ?? "택배사 미지정"} · {formatDateTime(scan.scannedAt)}
-                      </p>
-                    </div>
-                    <ul className="space-y-2">
-                      {matchedOrders.map((order, index) => (
-                        <li
-                          key={`${scan.id}-${order.orderNumber}-${index}`}
-                          className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-success/15 bg-success-soft/40 px-3 py-2"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              {order.siteName && (
-                                <span className="rounded-md bg-surface px-2 py-0.5 text-[11px] font-semibold text-foreground-muted ring-1 ring-border">
-                                  {order.siteName}
-                                </span>
-                              )}
-                              {order.brandName && (
-                                <span className="text-[11px] font-semibold text-foreground-muted">
-                                  {order.brandName}
-                                </span>
-                              )}
-                            </div>
-                            <p className="mt-0.5 truncate text-sm font-semibold text-foreground">
-                              {order.productName}
-                            </p>
-                            {(order.optionName || order.quantity) && (
-                              <p className="text-xs text-foreground-muted">
-                                {order.optionName ?? ""}
-                                {order.optionName && order.quantity ? " · " : ""}
-                                {order.quantity ? `${order.quantity}개` : ""}
-                              </p>
-                            )}
-                          </div>
-                          {typeof order.amount === "number" && order.amount > 0 && (
-                            <span className="shrink-0 text-sm font-semibold tabular-nums text-foreground">
-                              {order.amount.toLocaleString("ko-KR")}원
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-
-                {lastAutoMatch.unmatchedScans.length > 0 && (
-                  <div className="space-y-3 px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="h-4 w-4 text-warning-soft-foreground" />
-                      <p className="text-sm font-semibold text-warning-soft-foreground">
-                        매칭되지 않은 송장 {lastAutoMatch.unmatchedScans.length}건
-                      </p>
-                    </div>
-                    <ul className="flex flex-wrap gap-2">
-                      {lastAutoMatch.unmatchedScans.map((scan) => (
-                        <li
-                          key={`unmatched-${scan.id}`}
-                          className="rounded-lg border border-warning/30 bg-warning-soft px-3 py-1.5 font-mono text-xs text-warning-soft-foreground"
-                        >
-                          {maskTracking(scan.normalizedTrackingNumber)}
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="text-xs text-foreground-muted">
-                      주문 데이터를 가져온 뒤{" "}
-                      <span className="font-semibold text-foreground">
-                        전체 자동 매칭
-                      </span>
-                      을 다시 눌러주세요.
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </Card>
-        )}
-
-        <Card>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
-            <div>
-              <h2 className="text-base font-semibold text-foreground">
-                스캔 풀
-              </h2>
-              <p className="mt-0.5 text-sm text-foreground-muted">
-                먼저 스캔된 송장 목록입니다. 주문 데이터가 추가 입수되면 &lsquo;전체 자동 매칭&rsquo;으로 일괄 처리하세요.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-                className="w-36"
-              >
-                <option value="ALL">전체 상태</option>
-                <option value="SCANNED">스캔됨</option>
-                <option value="MATCHED">매칭 완료</option>
-                <option value="UNMATCHED">미매칭</option>
-                <option value="ISSUE">이슈</option>
-                <option value="IGNORED">제외</option>
-              </Select>
+            <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-stretch">
               <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="송장 검색"
-                className="w-48"
+                ref={scanInputRef}
+                value={scanValue}
+                onChange={(e) => setScanValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleScan(scanValue);
+                  }
+                }}
+                placeholder="여기를 클릭한 뒤 바코드를 스캔하세요"
+                className="h-14 font-mono text-xl font-bold tracking-wider"
+                autoFocus
               />
-              <Button variant="ghost" size="sm" onClick={loadScans}>
-                <RefreshCw className="h-3.5 w-3.5" />
-                새로고침
+              <Button
+                variant="primary"
+                className="h-14 px-6 text-base"
+                onClick={() => void handleScan(scanValue)}
+                loading={scanning}
+                disabled={scanning || !scanValue.trim()}
+              >
+                <Scan className="h-5 w-5" />
+                스캔
               </Button>
             </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-foreground-muted">
+              <span className="flex items-center gap-1.5">
+                <Keyboard className="h-3.5 w-3.5" />
+                USB 스캐너 Enter 자동 입력. 미매칭 송장은 DB에 영구 저장됩니다.
+              </span>
+              {lastScanDisplay ? (
+                <span className="font-mono text-foreground">
+                  마지막: {lastScanDisplay}
+                </span>
+              ) : null}
+            </div>
           </div>
+        </Card>
+      </div>
 
-          {scans.length === 0 ? (
+      {/* 좌/우 split */}
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+        {/* LEFT — 오늘 입고 + 미매칭 누적 (DB 기반) */}
+        <Card>
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                오늘 입고 + 미매칭 누적
+              </h2>
+              <p className="mt-0.5 text-sm text-foreground-muted">
+                오늘 스캔된 모든 송장 + 이전 미매칭 송장 (영구 저장)
+              </p>
+            </div>
+            <span className="text-xs tabular-nums text-foreground-muted">
+              {entries.length}건
+            </span>
+          </div>
+          {loadingEntries ? (
             <div className="p-6">
               <EmptyState
-                icon={Scan}
-                title="아직 스캔된 송장이 없습니다"
-                description="위 바코드 입력창에서 첫 송장을 스캔하면 여기에 표시됩니다."
+                icon={RefreshCw}
+                title="목록 불러오는 중..."
+                description=""
+              />
+            </div>
+          ) : entries.length === 0 ? (
+            <div className="p-6">
+              <EmptyState
+                icon={PackageSearch}
+                title="처리된 항목이 없습니다"
+                description="위 입력창에서 바코드를 스캔하세요."
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border bg-surface-2 text-xs uppercase tracking-wide text-foreground-muted">
-                    <th className="px-6 py-3 text-left font-semibold">송장</th>
-                    <th className="px-6 py-3 text-left font-semibold">상태</th>
-                    <th className="px-6 py-3 text-right font-semibold">매칭</th>
-                    <th className="px-6 py-3 text-right font-semibold">스캔 횟수</th>
-                    <th className="px-6 py-3 text-left font-semibold">최초 스캔</th>
-                    <th className="px-6 py-3 text-left font-semibold">최근 스캔</th>
-                    <th className="px-6 py-3 text-left font-semibold">매칭 시각</th>
-                    <th className="px-6 py-3 text-right font-semibold">작업</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {scans.map((scan) => (
-                    <tr key={scan.id} className="hover:bg-surface-2">
-                      <td className="px-6 py-3">
-                        <div className="font-mono text-sm font-semibold text-foreground">
-                          {maskTracking(scan.normalizedTrackingNumber)}
-                        </div>
-                        <div className="text-xs text-foreground-muted">
-                          {scan.carrier ?? "택배사 미지정"}
-                        </div>
-                      </td>
-                      <td className="px-6 py-3">
-                        <WarehouseStatusBadge status={scan.status} />
-                      </td>
-                      <td className="px-6 py-3 text-right font-semibold tabular-nums text-foreground">
-                        {scan.matchedOrderCount}
-                      </td>
-                      <td className="px-6 py-3 text-right tabular-nums text-foreground-muted">
-                        {scan.scanCount}
-                      </td>
-                      <td className="px-6 py-3 text-foreground-muted">
-                        {formatDateTime(scan.scannedAt)}
-                      </td>
-                      <td className="px-6 py-3 text-foreground-muted">
-                        {formatDateTime(scan.lastScannedAt)}
-                      </td>
-                      <td className="px-6 py-3 text-foreground-muted">
-                        {formatDateTime(scan.matchedAt)}
-                      </td>
-                      <td className="px-6 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleDeleteScan(
-                              scan.id,
-                              maskTracking(scan.normalizedTrackingNumber)
-                            )
-                          }
-                          className="rounded p-1.5 text-foreground-muted transition hover:bg-red-50 hover:text-red-600"
-                          title="잘못 스캔한 송장 삭제"
-                          aria-label="삭제"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <ul className="divide-y divide-border">
+              {entries.map((entry) => (
+                <EntryRow
+                  key={`entry-${entry.scan.id}`}
+                  entry={entry}
+                  onOpenMatch={handleOpenMatch}
+                />
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        {/* RIGHT — 처리 큐 */}
+        <Card>
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">처리 큐</h2>
+              <p className="mt-0.5 text-sm text-foreground-muted">
+                후보 선택 / 수동 매칭 작업 공간
+              </p>
             </div>
+            <span className="text-xs tabular-nums text-foreground-muted">
+              {actionItems.length}건
+            </span>
+          </div>
+          {actionItems.length === 0 ? (
+            <div className="p-6">
+              <EmptyState
+                icon={CheckCircle2}
+                title="처리할 항목이 없습니다"
+                description="좌측 미매칭 행의 '지금 매칭' 버튼을 누르거나, 스캔 후 후보가 여러 건이면 여기에 표시됩니다."
+              />
+            </div>
+          ) : (
+            <ul className="divide-y divide-border">
+              {actionItems.map((action) => (
+                <li key={action.key} className="space-y-3 px-6 py-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      {action.kind === "candidates" ? (
+                        <Clock className="h-4 w-4 text-warning-soft-foreground" />
+                      ) : (
+                        <AlertTriangle className="h-4 w-4 text-warning-soft-foreground" />
+                      )}
+                      <span className="font-mono text-sm font-semibold text-foreground">
+                        {maskTracking(action.trackingNumber)}
+                      </span>
+                      <StatusBadge
+                        label={action.kind === "candidates" ? "후보 선택" : "수동 검색"}
+                        tone="warning"
+                        dot
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => dismissAction(action.key)}
+                      className="rounded p-1 text-foreground-muted transition hover:bg-surface-2 hover:text-foreground"
+                      title="이 항목 닫기 (좌측 목록엔 그대로 남음)"
+                      aria-label="닫기"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {action.kind === "candidates" ? (
+                    <ul className="space-y-2">
+                      {action.candidates.map((cand) => (
+                        <li
+                          key={`${action.key}-${cand.orderItemId}`}
+                          className="flex items-start gap-3 rounded-xl border border-border bg-surface-2/40 px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-foreground">
+                                {cand.vyCode || cand.orderNumber}
+                              </span>
+                              <StatusBadge
+                                label={
+                                  STATUS_LABELS[cand.itemStatus] ?? cand.itemStatus
+                                }
+                                tone="info"
+                              />
+                            </div>
+                            <p className="mt-0.5 truncate text-xs text-foreground-muted">
+                              {cand.productName}
+                            </p>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-foreground-muted">
+                              <span>{cand.orderNumber}</span>
+                              {cand.customerName ? (
+                                <span>· {cand.customerName}</span>
+                              ) : null}
+                              {cand.domesticTrackingNumber ? (
+                                <span className="font-mono">
+                                  · {cand.domesticTrackingNumber}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() =>
+                              void handleConfirmCandidate(
+                                action.key,
+                                action.trackingNumber,
+                                cand
+                              )
+                            }
+                            loading={confirming === cand.orderItemId}
+                            disabled={confirming !== null}
+                          >
+                            <PackageCheck className="h-3.5 w-3.5" />
+                            확정
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <UnmatchedSearch
+                      actionKey={action.key}
+                      trackingNumber={action.trackingNumber}
+                      state={manualSearch[action.key]}
+                      onSearch={runManualSearch}
+                      onConfirm={(item) =>
+                        void handleConfirmCandidate(
+                          action.key,
+                          action.trackingNumber,
+                          item
+                        )
+                      }
+                      confirming={confirming}
+                    />
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
         </Card>
       </div>
     </AppShell>
+  );
+}
+
+// ─── 좌측 entry 한 줄 ───
+function EntryRow(props: {
+  entry: WarehouseTodayEntry;
+  onOpenMatch: (trackingNumber: string) => void;
+}) {
+  const { entry, onOpenMatch } = props;
+  const { scan, matchedItems, isToday } = entry;
+  const matchedItem = matchedItems[0]; // 보통 1건; 여러 건이면 첫 번째 표시
+
+  const isMatched = scan.status === "MATCHED" && matchedItem;
+  const tracking = scan.normalizedTrackingNumber || scan.trackingNumber;
+
+  return (
+    <li className="flex items-start gap-3 px-6 py-3">
+      {isMatched ? (
+        <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+      ) : (
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning-soft-foreground" />
+      )}
+      <div className="min-w-0 flex-1">
+        {isMatched ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-foreground">
+                {matchedItem.vyCode || matchedItem.orderNumber}
+              </span>
+              <StatusBadge
+                label={STATUS_LABELS[matchedItem.itemStatus] ?? matchedItem.itemStatus}
+                tone="info"
+              />
+              <StatusBadge label="입고 완료" tone="success" dot />
+              {!isToday ? (
+                <StatusBadge label="이전 매칭" tone="neutral" />
+              ) : null}
+            </div>
+            <p className="mt-0.5 truncate text-sm text-foreground-muted">
+              {matchedItem.productName}
+            </p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-foreground-muted">
+              <span>
+                {isToday ? formatTime(scan.matchedAt ?? scan.scannedAt) : formatDateTime(scan.scannedAt)}
+              </span>
+              {matchedItem.customerName ? <span>· {matchedItem.customerName}</span> : null}
+              <span className="font-mono">· {maskTracking(tracking)}</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-sm font-semibold text-foreground">
+                {maskTracking(tracking)}
+              </span>
+              <StatusBadge label="미매칭" tone="warning" dot />
+              {!isToday ? (
+                <StatusBadge label={`${formatDateTime(scan.scannedAt)} 입고`} tone="neutral" />
+              ) : null}
+            </div>
+            <p className="mt-0.5 text-xs text-foreground-muted">
+              {isToday
+                ? `${formatTime(scan.scannedAt)} · admin 주문이 동기화되면 매칭 가능`
+                : "admin 주문이 추가된 후 우측 패널에서 매칭하세요"}
+            </p>
+          </>
+        )}
+      </div>
+      {!isMatched ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onOpenMatch(scan.trackingNumber)}
+        >
+          <Search className="h-3 w-3" />
+          지금 매칭
+        </Button>
+      ) : null}
+    </li>
+  );
+}
+
+// ─── UNMATCHED 인라인 수동 검색 ───
+function UnmatchedSearch(props: {
+  actionKey: string;
+  trackingNumber: string;
+  state: { query: string; results: AdminMatchedItem[]; loading: boolean } | undefined;
+  onSearch: (actionKey: string, query: string) => void;
+  onConfirm: (item: AdminMatchedItem) => void;
+  confirming: number | null;
+}) {
+  const { actionKey, state, onSearch, onConfirm, confirming } = props;
+  const [input, setInput] = useState("");
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground-subtle" />
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onSearch(actionKey, input);
+              }
+            }}
+            placeholder="VY코드 / 고객명 / 상품명 / 주문번호"
+            className="h-9 pl-8 text-sm"
+          />
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onSearch(actionKey, input)}
+          loading={state?.loading}
+          disabled={state?.loading || !input.trim()}
+        >
+          검색
+        </Button>
+      </div>
+      {state && state.results.length > 0 ? (
+        <ul className="space-y-1.5">
+          {state.results.slice(0, 8).map((item) => (
+            <li
+              key={`${actionKey}-search-${item.orderItemId}`}
+              className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/40 px-2.5 py-2"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-foreground">
+                    {item.vyCode || item.orderNumber}
+                  </span>
+                  <StatusBadge
+                    label={STATUS_LABELS[item.itemStatus] ?? item.itemStatus}
+                    tone="info"
+                  />
+                </div>
+                <p className="mt-0.5 truncate text-xs text-foreground-muted">
+                  {item.productName}
+                </p>
+                {item.customerName ? (
+                  <p className="text-[11px] text-foreground-muted">{item.customerName}</p>
+                ) : null}
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => onConfirm(item)}
+                loading={confirming === item.orderItemId}
+                disabled={confirming !== null}
+              >
+                확정
+              </Button>
+            </li>
+          ))}
+          {state.results.length > 8 ? (
+            <li className="text-center text-[11px] text-foreground-muted">
+              외 {state.results.length - 8}건 — 검색어를 더 구체적으로 입력하세요
+            </li>
+          ) : null}
+        </ul>
+      ) : state && !state.loading ? (
+        <p className="text-[11px] text-foreground-muted">검색 결과 없음</p>
+      ) : null}
+    </div>
   );
 }

@@ -11,7 +11,6 @@ import {
   LayoutDashboard,
   List,
   PackageSearch,
-  ScanBarcode,
   Settings,
   type LucideIcon,
   Zap
@@ -51,24 +50,19 @@ const navItems: NavItem[] = [
     icon: Zap
   },
   {
+    href: "/warehouse",
+    label: "입고 & 매칭",
+    description: "스캔 → 매칭 → 동기화 한 번에",
+    icon: PackageSearch,
+    match: (pathname) =>
+      pathname === "/warehouse" || pathname === "/warehouse/scan"
+  },
+  {
     href: "/warehouse/items",
     label: "동기화 목록",
     description: "Admin 주문 아이템 전체",
     icon: List,
     match: (pathname) => pathname === "/warehouse/items"
-  },
-  {
-    href: "/warehouse/scan",
-    label: "스캔 매칭",
-    description: "바코드 스캔 / Admin 매칭",
-    icon: ScanBarcode
-  },
-  {
-    href: "/warehouse",
-    label: "입고",
-    description: "송장 스캔 / 자동 매칭",
-    icon: PackageSearch,
-    match: (pathname) => pathname === "/warehouse"
   },
   {
     href: "/warehouse/audit",
