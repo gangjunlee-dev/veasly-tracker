@@ -91,14 +91,81 @@ export class OrderSync {
       errors: [],
     };
 
-    // 1단계: 주문 목록 수집
+    // 1단계: 주문 목록 수집 (페이지별 조기종료 적용)
+    //
+    // 기존: 모든 status의 모든 페이지를 끝까지 fetch.
+    // 변경: 한 페이지 전체가 "이미 로컬에 있고 status 동일"이면 그 status의
+    //       이후 페이지를 skip. admin API는 최신 주문이 앞 페이지에 오므로
+    //       옛 페이지(=옛 주문)는 변경 없을 가능성이 높다는 가정.
+    // 위험: 옛 주문의 status가 갑자기 변경되면 그 변경분은 다음 sync까지 놓침.
     onProgress?.({ phase: "list", message: "배송 대기 주문 목록 조회 중..." });
 
-    let orders: AdminOrderListEntry[];
+    const PENDING_STATUSES = [
+      "PAYMENT_COMPLETED",
+      "ORDER_PROCESSING",
+      "SHIPPING_TO_BDJ",
+      "SHIPPING_TO_HOME",
+    ];
+    const PAGE_SIZE = 100;
+    const SAFETY_MAX_PAGE = 50;
+
+    const existsLookup = this.db.prepare(
+      "SELECT order_status FROM admin_orders WHERE order_number = ? LIMIT 1"
+    );
+
+    const orders: AdminOrderListEntry[] = [];
+    const seenOrderNumbers = new Set<string>();
+    let earlyStopPagesSaved = 0;
+
     try {
-      orders = await this.api.fetchPendingShipmentOrders((msg) => {
-        onProgress?.({ phase: "list", message: msg });
-      });
+      for (const status of PENDING_STATUSES) {
+        for (let page = 0; page < SAFETY_MAX_PAGE; page++) {
+          const { data, hasMore } = await this.api.fetchOrdersByStatus(
+            status,
+            page,
+            PAGE_SIZE
+          );
+
+          if (data.length === 0) break;
+
+          let unchangedInThisPage = 0;
+          for (const order of data) {
+            const num = order.orderNumber;
+            if (!num) continue;
+
+            const existing = existsLookup.get(num) as
+              | { order_status: string }
+              | undefined;
+            const remoteStatus = order.status ?? "UNKNOWN";
+            if (existing && existing.order_status === remoteStatus) {
+              unchangedInThisPage++;
+            }
+
+            if (!seenOrderNumbers.has(num)) {
+              seenOrderNumbers.add(num);
+              orders.push(order);
+            }
+          }
+
+          onProgress?.({
+            phase: "list",
+            message: `${status} page=${page} 조회 (이 페이지 ${unchangedInThisPage}/${data.length}건 동일, 누적 ${orders.length}건)`,
+          });
+
+          // 이 페이지 전체가 변경 없음 → 이전 페이지(옛 주문)도 변경 없다고 보고 종료.
+          if (unchangedInThisPage === data.length) {
+            // 남은 페이지가 더 있었다면 그만큼 절약된 것.
+            if (hasMore) earlyStopPagesSaved++;
+            onProgress?.({
+              phase: "list",
+              message: `${status}: page ${page} 전체가 변경 없음 — 이후 페이지 skip (시간 절약)`,
+            });
+            break;
+          }
+
+          if (!hasMore) break;
+        }
+      }
     } catch (err) {
       const msg = `주문 목록 조회 실패: ${err}`;
       logger.error(msg);
@@ -107,6 +174,10 @@ export class OrderSync {
     }
 
     result.fetched = orders.length;
+    logger.info(
+      `[Sync] List 수집 완료: ${orders.length}건 (조기종료 ${earlyStopPagesSaved}회 발동)`
+    );
+
     if (orders.length === 0) {
       onProgress?.({ phase: "done", message: "배송 대기 주문이 없습니다." });
       return result;
