@@ -14,6 +14,7 @@ import { AdminApiClient } from "../admin-api/client";
 import { OrderSync } from "../sync/order-sync";
 import { pushToOps } from "../sync/ops-push";
 import { auditLog } from "../services/audit";
+import { pairAdminWithSupplier, type PairingResult } from "../services/url-pairing";
 import { normalizeTrackingNumber } from "../utils/tracking";
 import log from "electron-log";
 
@@ -41,6 +42,34 @@ function kvGet(key: string): string | null {
 function kvDelete(key: string): void {
   const db = getDb();
   db.prepare("DELETE FROM kv WHERE key = ?").run(key);
+}
+
+/**
+ * admin sync 직후 URL 페어링을 안전하게 실행한다.
+ * - 페어링은 로컬 DB 갱신만 수행 (admin push 없음 — 도착 후 스캔/수동 확정 경로에서만 push).
+ * - 예외는 격리하여 sync 결과를 깨지 않는다.
+ * - 모호한 케이스는 audit log에 PAIR_AMBIGUOUS로 기록해 사후 추적 가능하게 한다.
+ */
+function runPairingSafely(): PairingResult | null {
+  try {
+    const db = getDb();
+    const pairing = pairAdminWithSupplier(db);
+    if (pairing.ambiguousItems.length > 0) {
+      for (const item of pairing.ambiguousItems) {
+        auditLog(
+          db,
+          "PAIR_AMBIGUOUS",
+          item.sourceOrderRef,
+          { order_item_id: item.adminOrderItemId },
+          { adminError: `${item.candidateCount} candidates` }
+        );
+      }
+    }
+    return pairing;
+  } catch (err) {
+    logger.warn("URL pairing failed (sync result preserved):", err);
+    return null;
+  }
 }
 
 export function registerAdminIpc(): void {
@@ -243,6 +272,9 @@ export function registerAdminIpc(): void {
     try {
       const result = await sync.syncPendingOrders();
 
+      // URL 페어링: 새로 내려온 admin_order_items에 기존 supplier 송장 연결.
+      const pairing = runPairingSafely();
+
       // ops 푸시 (설정되어 있으면)
       const opsUrl = kvGet("ops_url");
       const opsApiKey = kvGet("ops_api_key");
@@ -256,7 +288,7 @@ export function registerAdminIpc(): void {
         }
       }
 
-      return { ok: true, ...result, opsPush };
+      return { ok: true, ...result, opsPush, pairing };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
@@ -276,7 +308,8 @@ export function registerAdminIpc(): void {
             const retryApi = new AdminApiClient(tokens.accessToken);
             const retrySync = new OrderSync(db, retryApi);
             const retryResult = await retrySync.syncPendingOrders();
-            return { ok: true, ...retryResult };
+            const retryPairing = runPairingSafely();
+            return { ok: true, ...retryResult, pairing: retryPairing };
           } catch (retryErr) {
             const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
             return { ok: false, error: `재로그인 후 동기화 실패: ${retryMsg}` };

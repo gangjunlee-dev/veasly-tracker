@@ -25,6 +25,12 @@ export interface PairingResult {
   malformedUrl: number;
   /** 이번 호출로 새로 송장이 채워진 admin_order_items.id 목록 (admin push 대상) */
   pairedItemIds: number[];
+  /** 모호로 인해 skip된 항목들 — 호출자가 audit log 등으로 기록할 수 있게 노출 */
+  ambiguousItems: Array<{
+    adminOrderItemId: number;
+    sourceOrderRef: string;
+    candidateCount: number;
+  }>;
 }
 
 interface AdminCandidateRow {
@@ -45,7 +51,8 @@ export function pairAdminWithSupplier(db: Database.Database): PairingResult {
     noMatch: 0,
     ambiguous: 0,
     malformedUrl: 0,
-    pairedItemIds: []
+    pairedItemIds: [],
+    ambiguousItems: []
   };
 
   const candidates = db
@@ -107,6 +114,11 @@ export function pairAdminWithSupplier(db: Database.Database): PairingResult {
       const distinct = new Set(matched.map((r) => r.tracking_number));
       if (distinct.size > 1) {
         result.ambiguous += 1;
+        result.ambiguousItems.push({
+          adminOrderItemId: aoi.id,
+          sourceOrderRef: aoi.source_order_ref,
+          candidateCount: distinct.size
+        });
         logger.warn(
           `[pair] ambiguous tracking for aoi=${aoi.id} ref=${aoi.source_order_ref}: ${distinct.size} candidates`
         );

@@ -14,6 +14,8 @@ import {
   getSiteWithCredentials,
   touchSiteExtractedAt
 } from "../services/sites-repo";
+import { pairAdminWithSupplier } from "../services/url-pairing";
+import { auditLog } from "../services/audit";
 
 const log = createLogger("extractor");
 import {
@@ -411,6 +413,33 @@ async function runExtraction(input: {
       message: "Extraction completed",
       ...result
     });
+
+    // URL 페어링: 추출된 supplier 송장을 admin_order_items.domestic_tracking_number로 복사.
+    // admin.veasly.com에는 push하지 않음 (도착 후 스캔/수동 확정 시에만 push).
+    // 예외는 격리하여 추출 성공 결과를 깨지 않게 한다.
+    try {
+      const pairing = pairAdminWithSupplier(getDb());
+      if (pairing.paired > 0 || pairing.ambiguous > 0) {
+        report(
+          "saving",
+          `페어링: 매칭 ${pairing.paired} / 모호 ${pairing.ambiguous} / 미발견 ${pairing.noMatch}`
+        );
+      }
+      if (pairing.ambiguousItems.length > 0) {
+        const db = getDb();
+        for (const item of pairing.ambiguousItems) {
+          auditLog(
+            db,
+            "PAIR_AMBIGUOUS",
+            item.sourceOrderRef,
+            { order_item_id: item.adminOrderItemId },
+            { adminError: `${item.candidateCount} candidates` }
+          );
+        }
+      }
+    } catch (pairErr) {
+      log.warn("URL pairing failed (extraction success preserved)", pairErr);
+    }
 
     report("success", "Extraction completed", {
       ordersFound: result.totalOrders
