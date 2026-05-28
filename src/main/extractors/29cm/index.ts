@@ -1317,7 +1317,36 @@ function normalizeTwentyNineCmStatusFinal(statusText?: string, rawText?: string)
   return "PENDING";
 }
 
-function cleanTwentyNineCmProductNameFinal(productName?: string | null, rawText?: string | null): string {
+// 29CM 카드 rawText에서 상품명 앞쪽에 반복적으로 붙는 noise 토큰들을
+// "마지막 매치 위치까지" 잘라낸다. 한 카드에 여러 상품이 있을 때
+// segmentBeforeAmount = [이전 상품의 후위 노이즈] + [이번 상품의 [상태][날짜][도착키워드][브랜드+상품명+옵션]]
+// 구조이므로, 노이즈 토큰의 "마지막 매치 끝 이후"가 진짜 상품명이다.
+export function stripLeadingNoiseFromProductText(text: string): string {
+  if (!text) return "";
+
+  const noiseEnd =
+    /(?:주문일자\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\s*주문상세|주문상세|이내\s*배송시작|도착\s*예정|도착|취소상세|취소접수|반품접수|교환접수|배송조회|리뷰작성\s*\+\s*최대\s*[\d,]+\s*원|구매확정\s*\+\s*\d[\d,]*\s*원|(?:결제완료|상품준비중|배송준비중|배송완료|배송중|배송시작|구매확정|취소완료)\s*\d{1,2}\.\s*\d{1,2}\s*\([^)]+\)|배송비\s*:\s*(?:무료배송|[\d,]+\s*원)|결제완료|상품준비중|배송준비중|배송완료|배송중|배송시작|구매확정|취소완료|\d{1,2}\.\s*\d{1,2}\s*\([^)]+\))/g;
+
+  let lastEnd = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = noiseEnd.exec(text)) !== null) {
+    lastEnd = m.index + m[0].length;
+    // Safety: zero-length match로 무한 루프 빠지지 않도록.
+    if (m[0].length === 0) noiseEnd.lastIndex += 1;
+  }
+
+  const stripped = text.slice(lastEnd).trim();
+
+  // Safety: 과도하게 잘렸으면 (3자 미만) 원본을 살린다.
+  if (stripped.length < 3 && text.trim().length >= 3) {
+    return text.trim();
+  }
+
+  return stripped;
+}
+
+export function cleanTwentyNineCmProductNameFinal(productName?: string | null, rawText?: string | null): string {
   const raw = String(rawText || "").replace(/\s+/g, " ").trim();
   let text = String(productName || "").replace(/\s+/g, " ").trim();
 
@@ -1333,36 +1362,12 @@ function cleanTwentyNineCmProductNameFinal(productName?: string | null, rawText?
     }
   }
 
-  text = text
-    .replace(/\s+/g, " ")
-    .trim();
+  text = text.replace(/\s+/g, " ").trim();
 
-  // 앞쪽 주문일자/주문상세 제거
-  text = text
-    .replace(/^주문일자\s*\d{4}\.\s*\d{1,2}\.\s*\d{1,2}/, "")
-    .replace(/^주문상세/, "")
-    .replace(/^주문일자.*?주문상세/, "")
-    .trim();
+  // 앞쪽 noise (상태/날짜/액션버튼/이전 상품의 후위 부산물) 전체를 한 번에 제거.
+  text = stripLeadingNoiseFromProductText(text);
 
-  // 앞쪽 상태 제거
-  text = text
-    .replace(/^(결제완료|상품준비중|배송시작|배송중|배송완료|구매확정|취소완료|반품완료|교환완료)/, "")
-    .trim();
-
-  // 앞쪽 도착일/배송예정일 제거
-  // 예: "5. 14 (목) 도착페이즈..." => "페이즈..."
-  // 예: "5. 20 (수) 도착 예정조스라운지..." => "조스라운지..."
-  text = text
-    .replace(/^\d{1,2}\.\s*\d{1,2}\s*\([^)]*\)\s*(도착 예정|도착|이내 배송시작)/, "")
-    .trim();
-
-  // 상태가 다시 한번 붙은 경우 제거
-  text = text
-    .replace(/^(결제완료|상품준비중|배송시작|배송중|배송완료|구매확정|취소완료|반품완료|교환완료)/, "")
-    .replace(/^\d{1,2}\.\s*\d{1,2}\s*\([^)]*\)\s*(도착 예정|도착|이내 배송시작)/, "")
-    .trim();
-
-  // 뒤쪽 불필요 액션/배송 정보 제거
+  // 뒤쪽 trailing 정리는 유지 — anchor textContent를 productName으로 받은 케이스 대비.
   text = text
     .replace(/배송완료.*$/, "")
     .replace(/배송중.*$/, "")
@@ -1636,6 +1641,58 @@ function expandTwentyNineCmItemsForProducts<T extends object>(items: T[]): T[] {
   return expanded;
 }
 
+async function waitForTwentyNineCmOrderCards(
+  page: Page,
+  progress?: ProgressReporter
+): Promise<{ cardCount: number; isEmptyPage: boolean }> {
+  const maxWaitMs = 15000;
+  const pollIntervalMs = 500;
+  const startedAt = Date.now();
+
+  let last = { cardCount: 0, isEmptyPage: false };
+
+  while (Date.now() - startedAt < maxWaitMs) {
+    last = await page.evaluate(() => {
+      const clean = (v: unknown) =>
+        String(v || "").replace(/\s+/g, " ").trim();
+
+      const lis = Array.from(document.querySelectorAll("li"));
+      const cardCount = lis.filter((el) => {
+        const t = clean(el.textContent || "");
+        return (
+          /주문일자\s*20\d{2}[.]/.test(t) &&
+          /주문상세/.test(t) &&
+          /[\d,]+\s*원\s*\/\s*수량\s*\d+\s*개/.test(t)
+        );
+      }).length;
+
+      const body = clean(document.body?.innerText || "");
+      const isEmptyPage =
+        /주문한\s*상품이\s*없습니다|주문\s*내역이\s*없습니다|구매\s*내역이\s*없습니다/.test(
+          body
+        );
+
+      return { cardCount, isEmptyPage };
+    });
+
+    if (last.cardCount > 0 || last.isEmptyPage) {
+      return last;
+    }
+
+    await page.waitForTimeout(pollIntervalMs);
+  }
+
+  progress?.({
+    runId: "",
+    siteId: 0,
+    siteCode: config.code,
+    phase: "extracting",
+    message: `29CM 주문 카드 등장을 ${maxWaitMs}ms 기다렸으나 감지하지 못함 (마지막 cardCount=${last.cardCount})`
+  });
+
+  return last;
+}
+
 async function extractTwentyNineCmOrdersFromListPage(
   page: Page,
   options: ExtractionOptions,
@@ -1644,7 +1701,21 @@ async function extractTwentyNineCmOrdersFromListPage(
   await gotoTwentyNineCmOrderList(page);
 
   await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-  await page.waitForTimeout(2500);
+
+  // 주문 카드 li가 실제로 렌더될 때까지 폴링.
+  // 기존 고정 2500ms 대기는 lazy load/지연 렌더 환경에서 0건이 자주 나옴.
+  // (사용자가 본 "추출했는데 변화 없음"의 주요 원인)
+  const waitResult = await waitForTwentyNineCmOrderCards(page, progress);
+
+  progress?.({
+    runId: "",
+    siteId: 0,
+    siteCode: config.code,
+    phase: "extracting",
+    message: waitResult.isEmptyPage
+      ? "29CM 주문 내역이 비어있음을 확인"
+      : `29CM 주문 카드 ${waitResult.cardCount}건 렌더 확인`
+  });
 
   const rawItems = await page.evaluate(() => {
     const clean = (value: unknown) =>

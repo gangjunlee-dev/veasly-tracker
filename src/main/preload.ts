@@ -39,7 +39,9 @@ const api = {
     export: (input: ExportOrdersInput) =>
       ipcRenderer.invoke("orders:export", input),
     importOliveYoungSnapshot: (input: ImportOliveYoungSnapshotInput) =>
-      ipcRenderer.invoke("orders:importOliveYoungSnapshot", input)
+      ipcRenderer.invoke("orders:importOliveYoungSnapshot", input),
+    cleanup29cmProductNames: (input?: { dryRun?: boolean }) =>
+      ipcRenderer.invoke("orders:cleanup29cmProductNames", input ?? {})
   },
   warehouse: {
     scanInbound: (input: WarehouseScanInboundInput) =>

@@ -3,6 +3,7 @@ import { z } from "zod";
 import crypto from "node:crypto";
 import { ensureOrdersRuntimeColumns, getDb } from "../db/client";
 import { normalizeTrackingNumber } from "../utils/tracking";
+import { cleanTwentyNineCmProductNameFinal } from "../extractors/29cm";
 
 const PaginationSchema = z.object({
   page: z.number().int().positive().default(1),
@@ -515,6 +516,108 @@ export function registerOrdersIpc() {
       total: Number(totalRow.total),
       page: input.page,
       pageSize: input.pageSize
+    };
+  });
+
+  // 일회성 정리 작업.
+  // 과거 추출에서 split/clean 버그로 productName이 송장/액션버튼/날짜 prefix로
+  // 오염된 29CM row를 raw_data.rawText 기반으로 재계산해서 UPDATE.
+  // dryRun=true 면 미리보기만 (default).
+  ipcMain.handle("orders:cleanup29cmProductNames", async (_event, rawInput) => {
+    const input = z
+      .object({
+        dryRun: z.boolean().default(true)
+      })
+      .parse(rawInput ?? {});
+
+    const db = getDb();
+    const site = db
+      .prepare("SELECT id FROM sites WHERE code = '29cm'")
+      .get() as { id: number } | undefined;
+
+    if (!site) {
+      return { error: "29cm site not found" };
+    }
+
+    const rows = db
+      .prepare(
+        "SELECT id, product_name, raw_data FROM orders WHERE site_id = ?"
+      )
+      .all(site.id) as Array<{
+      id: number;
+      product_name: string;
+      raw_data: string | null;
+    }>;
+
+    const updates: Array<{
+      id: number;
+      oldName: string;
+      newName: string;
+    }> = [];
+
+    let skippedNoRawText = 0;
+    let skippedParseError = 0;
+
+    for (const row of rows) {
+      if (!row.raw_data) {
+        skippedNoRawText += 1;
+        continue;
+      }
+
+      let parsed: { rawText?: unknown } = {};
+      try {
+        const json = JSON.parse(row.raw_data);
+        parsed = json && typeof json === "object" ? json : {};
+      } catch {
+        skippedParseError += 1;
+        continue;
+      }
+
+      const rawText =
+        typeof parsed.rawText === "string" ? parsed.rawText : "";
+
+      if (!rawText) {
+        skippedNoRawText += 1;
+        continue;
+      }
+
+      const newName = cleanTwentyNineCmProductNameFinal(row.product_name, rawText);
+
+      if (newName && newName !== row.product_name) {
+        updates.push({
+          id: row.id,
+          oldName: row.product_name,
+          newName
+        });
+      }
+    }
+
+    if (!input.dryRun && updates.length > 0) {
+      const update = db.prepare(
+        "UPDATE orders SET product_name = ?, updated_at = datetime('now') WHERE id = ?"
+      );
+
+      const tx = db.transaction((items: typeof updates) => {
+        for (const item of items) {
+          update.run(item.newName, item.id);
+        }
+      });
+
+      tx(updates);
+    }
+
+    return {
+      siteId: site.id,
+      totalChecked: rows.length,
+      needsUpdate: updates.length,
+      skippedNoRawText,
+      skippedParseError,
+      applied: !input.dryRun,
+      samples: updates.slice(0, 10).map((u) => ({
+        id: u.id,
+        oldName: u.oldName.slice(0, 60),
+        newName: u.newName.slice(0, 60)
+      }))
     };
   });
 
