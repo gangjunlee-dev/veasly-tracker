@@ -1693,31 +1693,10 @@ async function waitForTwentyNineCmOrderCards(
   return last;
 }
 
-async function extractTwentyNineCmOrdersFromListPage(
-  page: Page,
-  options: ExtractionOptions,
-  progress?: ProgressReporter
-): Promise<StandardOrder[]> {
-  await gotoTwentyNineCmOrderList(page);
-
-  await page.waitForLoadState("domcontentloaded").catch(() => undefined);
-
-  // 주문 카드 li가 실제로 렌더될 때까지 폴링.
-  // 기존 고정 2500ms 대기는 lazy load/지연 렌더 환경에서 0건이 자주 나옴.
-  // (사용자가 본 "추출했는데 변화 없음"의 주요 원인)
-  const waitResult = await waitForTwentyNineCmOrderCards(page, progress);
-
-  progress?.({
-    runId: "",
-    siteId: 0,
-    siteCode: config.code,
-    phase: "extracting",
-    message: waitResult.isEmptyPage
-      ? "29CM 주문 내역이 비어있음을 확인"
-      : `29CM 주문 카드 ${waitResult.cardCount}건 렌더 확인`
-  });
-
-  const rawItems = await page.evaluate(() => {
+async function extractTwentyNineCmRawCardsFromCurrentPage(
+  page: Page
+): Promise<TwentyNineCmListRawItem[]> {
+  return await page.evaluate(() => {
     const clean = (value: unknown) =>
       String(value || "")
         .replace(/\s+/g, " ")
@@ -1857,41 +1836,154 @@ async function extractTwentyNineCmOrdersFromListPage(
 
     return uniqueItems;
   });
+}
 
+async function gotoTwentyNineCmListPageNumber(
+  page: Page,
+  pageNumber: number
+): Promise<void> {
+  if (pageNumber === 1) {
+    await gotoTwentyNineCmOrderList(page);
+    return;
+  }
+
+  const url = `https://www.29cm.co.kr/order/my-order/list?page=${pageNumber}`;
+  await page
+    .goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000
+    })
+    .catch(() => undefined);
+  await page.waitForLoadState("domcontentloaded").catch(() => undefined);
+}
+
+async function extractTwentyNineCmOrdersFromListPage(
+  page: Page,
+  options: ExtractionOptions,
+  progress?: ProgressReporter
+): Promise<StandardOrder[]> {
   const since = normalizeTwentyNineCmDateInput(options.since);
   const until = normalizeTwentyNineCmDateInput(options.until);
 
-  const dateFiltered = rawItems.filter((item) =>
-    isTwentyNineCmDateInRange(item.orderDate, since, until)
-  );
+  // UI 변수명은 maxPages지만 실제 의미는 "최대 추출 상품 수".
+  // (UI 이름 정리는 별도 작업 — 다른 사이트들도 같은 옵션을 쓰므로.)
+  const maxItemsOption = options.maxPages;
+  const maxItems =
+    maxItemsOption && maxItemsOption > 0
+      ? Number(maxItemsOption)
+      : Number.POSITIVE_INFINITY;
+
+  // 29CM 주문내역은 ?page=N 페이지네이션. 한 페이지에 ~20카드.
+  // 안전상 30 페이지까지만 (이상한 무한 루프 방지).
+  const SAFETY_MAX_PAGE = 30;
+
+  const allProducts: TwentyNineCmListRawItem[] = [];
+  let lastFirstSourceOrderNumber: string | null = null;
+
+  for (let currentPage = 1; currentPage <= SAFETY_MAX_PAGE; currentPage += 1) {
+    await gotoTwentyNineCmListPageNumber(page, currentPage);
+
+    const waitResult = await waitForTwentyNineCmOrderCards(page, progress);
+
+    if (waitResult.isEmptyPage) {
+      progress?.({
+        runId: "",
+        siteId: 0,
+        siteCode: config.code,
+        phase: "extracting",
+        message: `29CM 페이지 ${currentPage}: 주문 내역 비어있음 — 순회 종료`
+      });
+      break;
+    }
+
+    if (waitResult.cardCount === 0) {
+      progress?.({
+        runId: "",
+        siteId: 0,
+        siteCode: config.code,
+        phase: "extracting",
+        message: `29CM 페이지 ${currentPage}: 카드 렌더 감지 실패 — 순회 종료`
+      });
+      break;
+    }
+
+    const pageRawItems = await extractTwentyNineCmRawCardsFromCurrentPage(page);
+
+    if (pageRawItems.length === 0) {
+      progress?.({
+        runId: "",
+        siteId: 0,
+        siteCode: config.code,
+        phase: "extracting",
+        message: `29CM 페이지 ${currentPage}: rawItems 0건 — 순회 종료`
+      });
+      break;
+    }
+
+    // 페이지 이동이 무시되고 같은 페이지가 다시 로드된 경우 감지.
+    const firstSourceOrderNumber = pageRawItems[0]?.sourceOrderNumber;
+    if (
+      currentPage > 1 &&
+      firstSourceOrderNumber &&
+      firstSourceOrderNumber === lastFirstSourceOrderNumber
+    ) {
+      progress?.({
+        runId: "",
+        siteId: 0,
+        siteCode: config.code,
+        phase: "extracting",
+        message: `29CM 페이지 ${currentPage}: 이전 페이지와 동일한 데이터 — 마지막 페이지로 간주, 순회 종료`
+      });
+      break;
+    }
+    lastFirstSourceOrderNumber = firstSourceOrderNumber ?? null;
+
+    const dateFiltered = pageRawItems.filter((item) =>
+      isTwentyNineCmDateInRange(item.orderDate, since, until)
+    );
+
+    const expandedPage = expandTwentyNineCmItemsForProducts(dateFiltered);
+    allProducts.push(...expandedPage);
+
+    progress?.({
+      runId: "",
+      siteId: 0,
+      siteCode: config.code,
+      phase: "extracting",
+      message: `29CM 페이지 ${currentPage}: 카드 ${pageRawItems.length} → 날짜필터 ${dateFiltered.length} → split ${expandedPage.length} (누적 ${allProducts.length})`,
+      current: allProducts.length,
+      total: Number.isFinite(maxItems) ? maxItems : undefined
+    });
+
+    if (allProducts.length >= maxItems) {
+      progress?.({
+        runId: "",
+        siteId: 0,
+        siteCode: config.code,
+        phase: "extracting",
+        message: `29CM 누적 ${allProducts.length}건 — maxItems(${maxItems}) 도달, 순회 종료`
+      });
+      break;
+    }
+  }
+
+  const targetProducts = Number.isFinite(maxItems)
+    ? allProducts.slice(0, maxItems)
+    : allProducts;
 
   progress?.({
     runId: "",
     siteId: 0,
     siteCode: config.code,
     phase: "extracting",
-    message: `29CM 목록 페이지 상품 ${rawItems.length}건 중 날짜 필터 후 ${dateFiltered.length}건 대상`
-  });
-
-  const requestedMaxItems =
-    options.maxPages && options.maxPages > 0 ? options.maxPages : dateFiltered.length;
-
-  const targetItems = dateFiltered.slice(0, requestedMaxItems);
-  const expandedTargetItems = expandTwentyNineCmItemsForProducts(targetItems);
-
-  progress?.({
-    runId: "",
-    siteId: 0,
-    siteCode: config.code,
-    phase: "extracting",
-    message: `29CM 상품 split: 원본 ${targetItems.length}건 → 상품 ${expandedTargetItems.length}건`,
-    current: expandedTargetItems.length,
-    total: expandedTargetItems.length
+    message: `29CM 페이지 순회 완료: 누적 ${allProducts.length}건 → 상한 적용 ${targetProducts.length}건`,
+    current: targetProducts.length,
+    total: targetProducts.length
   });
 
   const lineCounters = new Map<string, number>();
 
-  const orders = expandedTargetItems.map((item) => {
+  const orders = targetProducts.map((item) => {
     const nextLineIndex = (lineCounters.get(item.sourceOrderNumber) || 0) + 1;
     lineCounters.set(item.sourceOrderNumber, nextLineIndex);
 
@@ -1935,7 +2027,7 @@ async function extractTwentyNineCmOrdersFromListPage(
     siteId: 0,
     siteCode: config.code,
     phase: "extracting",
-    message: `29CM 목록 페이지에서 상품별 주문 ${orders.length}건 추출 완료`,
+    message: `29CM 페이지 순회로 상품별 주문 ${orders.length}건 추출 완료`,
     current: orders.length,
     total: orders.length
   });
