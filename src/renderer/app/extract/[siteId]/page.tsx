@@ -248,13 +248,15 @@ export default function SiteExtractPage() {
         setRunningRunId(null);
         if (item.phase === "success") {
           toast.success(item.message ?? "추출이 완료되었습니다.");
+          // lastExtractedAt 갱신을 위해 site 정보를 다시 가져온다.
+          void loadSite();
         } else {
           toast.error(item.message ?? "추출 실행이 중단되었습니다.");
         }
       }
     });
     return () => unsubscribe();
-  }, [siteId, loadOrders, loadLogs]);
+  }, [siteId, loadOrders, loadLogs, loadSite]);
 
   const handleExtract = async () => {
     if (!site) return;

@@ -73,6 +73,8 @@ export default function ExtractPage() {
 
         if (item.phase === "success") {
           toast.success(item.message ?? "주문 추출이 완료되었습니다.");
+          // 추출 성공 후 sites를 다시 가져와 lastExtractedAt을 화면에 반영.
+          void loadData();
         } else {
           toast.error(item.message ?? "추출 실행 중 문제가 발생했습니다.");
         }
@@ -80,7 +82,7 @@ export default function ExtractPage() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [loadData]);
 
   const handleExtract = async (siteId: number) => {
     const site = sites.find((s) => s.id === siteId);
